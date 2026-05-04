@@ -90,11 +90,15 @@ Trigger: `hasCode || isDeep || words > 80`
 ## 3. System Prompt per Mode
 
 ### Aturan Universal (SEMUA mode)
-1. **Format WAJIB HTML Telegram**: `<b>`, `<i>`, `<code>`, `<pre>`
-2. **DILARANG** markdown: `**`, `__`, `##`, ` ``` `, `---`
-3. **DILARANG** tabel — Telegram tidak render tabel
-4. Paragraf pendek — max 3-4 baris per blok
-5. Tidak ada disclaimer, peringatan, atau "sebagai AI..." yang tidak perlu
+1. **Tag HTML VALID di Telegram**: hanya `<b>`, `<i>`, `<code>`, `<pre>`, `<a>`, `<s>`, `<u>`, `<tg-spoiler>`
+2. **DILARANG KERAS** (Telegram tidak mendukung — akan tampil sebagai teks mentah):
+   - Markdown: `**`, `__`, `##`, ` ``` `, `---`
+   - HTML list: `<ul>`, `<ol>`, `<li>`
+   - HTML heading: `<h1>` s/d `<h6>`
+   - HTML lain: `<br>`, `<hr>`, `<p>`, `<div>`, `<span>`, `<table>`, `<tr>`, `<td>`
+3. Paragraf pendek — max 3-4 baris per blok
+4. Tidak ada disclaimer, peringatan, atau "sebagai AI..." yang tidak perlu
+5. Framing aturan dalam system prompt: gunakan "Tag HTML yang BOLEH dipakai (hanya ini yang valid di Telegram)" — bukan "Format WAJIB" — agar model lebih patuh
 
 ### Mode: `general` (default)
 - Adaptif antara casual dan teknis

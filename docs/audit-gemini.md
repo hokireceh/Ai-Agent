@@ -18,6 +18,21 @@
 
 ## Known Issues & Fixes
 
+### ❌ Issue #004: `gemini-2.5-pro-preview-05-06` → 404 pada free tier API key (FIXED)
+- **Status:** Model ada tapi butuh billing / akses khusus (bukan free tier biasa)
+- **Error:** 404 Not Found
+- **Fix:** Hapus dari auto-cascade. Tetap tersedia sebagai opsi manual di model menu, tapi user harus sadari ini butuh billing.
+- **Tier 3 cascade diupdate:** `[flash25 → flash → lite]` (Pro dikeluarkan dari auto)
+
+### ❌ Issue #005: Gemini Flash 2.5 generate `<ul>`, `<li>` → invalid di Telegram (FIXED)
+- **Root cause:** System prompt hanya menyebut "dilarang tabel" — model tetap generate HTML list yang valid secara HTML tapi tidak didukung Telegram
+- **Symptom:** Response tampil dengan tag `<ul>` dan `<li>` sebagai teks mentah di chat
+- **Fix:** Perkuat framing di system prompt:
+  - Dari: "Format WAJIB HTML Telegram, dilarang markdown"
+  - Ke: "Tag HTML yang BOLEH dipakai (hanya ini yang valid di Telegram)"
+  - Tambahkan daftar eksplisit yang DILARANG: `<ul>`, `<ol>`, `<li>`, `<h1>`-`<h6>`, `<br>`, `<hr>`
+- **Catatan:** Framing positif ("yang boleh") + daftar negatif eksplisit lebih efektif daripada hanya framing negatif
+
 ### ❌ Issue #001: `gemini-1.5-flash` → 404 Not Found (FIXED)
 - **Status:** Deprecated di endpoint v1beta per Mei 2026
 - **Error:** `models/gemini-1.5-flash is not found for API version v1beta`

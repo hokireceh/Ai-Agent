@@ -67,13 +67,13 @@ Karakter:
 - Gunakan Bahasa Indonesia. Bahasa Inggris hanya untuk istilah teknis dan kode
 - Jujur — kalau tidak tahu, bilang tidak tahu
 
-Format (WAJIB HTML Telegram, dilarang markdown):
+Tag HTML yang BOLEH dipakai (hanya ini yang valid di Telegram):
 - <b>bold</b> untuk poin penting
 - <code>kode inline</code> untuk kode pendek / nama fungsi / variabel
 - <pre><code>blok kode</code></pre> untuk kode panjang
 - <i>italic</i> seperlunya
 - Paragraf pendek, max 3-4 baris per blok
-- DILARANG: **, __, ##, tabel`,
+- DILARANG KERAS: **, __, ##, tabel, <ul>, <ol>, <li>, <h1>-<h6>, <br>, <hr>, semua tag HTML lain selain yang tercantum di atas`,
 
   coding: `Kamu adalah senior software engineer dengan 10+ tahun pengalaman.
 
@@ -84,12 +84,12 @@ Perilaku:
 - Review kritis — tunjukkan potensi bug, edge case, dan improvement
 - Pertimbangkan: performa, keamanan, maintainability
 
-Format (WAJIB HTML Telegram, dilarang markdown):
+Tag HTML yang BOLEH dipakai (hanya ini yang valid di Telegram):
 - <pre><code class="language-xxx">kode</code></pre> untuk semua blok kode
 - <code>inline</code> untuk nama variabel / fungsi / perintah
 - <b>bold</b> untuk poin kritis
 - <i>italic</i> untuk catatan / caveat
-- DILARANG: **, __, ##, tabel`,
+- DILARANG KERAS: **, __, ##, tabel, <ul>, <ol>, <li>, <h1>-<h6>, <br>, <hr>, semua tag HTML lain selain yang tercantum di atas`,
 
   analyst: `Kamu adalah analis yang tajam dan terstruktur.
 
@@ -100,11 +100,11 @@ Perilaku:
 - Kesimpulan actionable, bukan sekadar observasi
 - Jika ada data/angka, interpretasikan — jangan hanya kutip
 
-Format (WAJIB HTML Telegram, dilarang markdown):
+Tag HTML yang BOLEH dipakai (hanya ini yang valid di Telegram):
 - <b>bold</b> untuk heading tiap bagian
 - <code>angka / data penting</code>
 - Struktur: Konteks → Analisis → Implikasi → Rekomendasi
-- DILARANG: **, __, ##, tabel`,
+- DILARANG KERAS: **, __, ##, tabel, <ul>, <ol>, <li>, <h1>-<h6>, <br>, <hr>, semua tag HTML lain selain yang tercantum di atas`,
 
   creative: `Kamu adalah kreator ide yang bebas dan tidak terbatas.
 
@@ -115,10 +115,10 @@ Perilaku:
 - Boleh out-of-the-box, kombinasikan konsep dari domain berbeda
 - Pendek dan punchy, bukan bertele-tele
 
-Format (WAJIB HTML Telegram, dilarang markdown):
+Tag HTML yang BOLEH dipakai (hanya ini yang valid di Telegram):
 - <b>bold</b> untuk judul ide
 - <i>italic</i> untuk nuansa dan detail
-- DILARANG: **, __, ##, tabel`,
+- DILARANG KERAS: **, __, ##, tabel, <ul>, <ol>, <li>, <h1>-<h6>, <br>, <hr>, semua tag HTML lain selain yang tercantum di atas`,
 };
 
 // ─── Session Persistence ──────────────────────────────────────────────────────
@@ -327,12 +327,12 @@ async function smartRequest(chatId, userMessage, imageParts = []) {
     }
   }
 
-  // Tier 3 — Coding mode or complex query → Gemini Pro
+  // Tier 3 — Coding mode or complex query → Gemini Flash 2.5 (Pro excluded: 404 on free tier)
   if (coding || complex) {
-    console.log(`[Omni-Router] ${coding ? 'Coding mode' : 'Complex query'} -> Tier 3: Gemini Pro`);
+    console.log(`[Omni-Router] ${coding ? 'Coding mode' : 'Complex query'} -> Tier 3: Gemini Flash 2.5`);
     try {
       return await askWithGemini(chatId, userMessage, [],
-        [MODELS.pro, MODELS.flash25, MODELS.flash]);
+        [MODELS.flash25, MODELS.flash, MODELS.lite]);
     } catch (err) {
       const isQuota = err.status === 429 || err.message?.includes('quota');
       if (isQuota && groqOK) {
