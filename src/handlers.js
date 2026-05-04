@@ -1,0 +1,424 @@
+'use strict';
+
+const { ALLOWED_USERS, ADMIN_USERS, MODELS, GROQ_MODELS, MODEL_LABELS } = require('./config');
+const { sessions, getSession, saveSessions } = require('./session');
+const { groq, smartRequest, askWithGemini } = require('./router');
+const { sanitizeForTelegram, escapeHtml, downloadAsBase64, sendLong } = require('./sanitizer');
+const { groqAdmin, ADMIN_MODEL, isAdmin, analyzeCode } = require('./admin');
+const { buildMainMenu, modeMenu, modelMenu, miniMenu, adminMenu, adminMiniMenu } = require('./menus');
+
+// ─── Auth ──────────────────────────────────────────────────────────────────────
+function isAllowed(userId) {
+  if (ALLOWED_USERS.length === 0) return true;
+  return ALLOWED_USERS.includes(userId);
+}
+
+function authMiddleware(ctx, next) {
+  if (!isAllowed(ctx.from?.id)) {
+    console.log(`⛔ Akses ditolak — User ID: ${ctx.from?.id}`);
+    return ctx.reply('⛔ Akses tidak diizinkan.');
+  }
+  return next();
+}
+
+// ─── Info text ─────────────────────────────────────────────────────────────────
+function buildInfoText(session) {
+  return [
+    '<b>ℹ️ Info Bot</b>',
+    '',
+    `Mode: <code>${session.mode}</code>`,
+    `Model: <code>${MODEL_LABELS[session.model] ?? session.model}</code>`,
+    `History: <code>${Math.floor(session.history.length / 2)} exchange</code>`,
+    '',
+    '<b>Gemini Models:</b>',
+    `✨ <code>${MODELS.flash25}</code>`,
+    `🧠 <code>${MODELS.pro}</code>`,
+    `🔥 <code>${MODELS.flash}</code>`,
+    '',
+    `<b>Groq Models:</b> ${groq ? 'aktif' : '⚠️ tidak aktif (no GROQ_API_KEY)'}`,
+    groq ? `⚡ <code>${GROQ_MODELS.instant}</code>`   : '',
+    groq ? `🦙 <code>${GROQ_MODELS.versatile}</code>` : '',
+    groq ? `🐉 <code>${GROQ_MODELS.qwen}</code>`      : '',
+  ].filter(l => l !== '').join('\n');
+}
+
+// ─── Admin guard ───────────────────────────────────────────────────────────────
+function adminGuard(ctx) {
+  if (!isAdmin(ctx.from.id)) {
+    ctx.answerCbQuery('⛔ Akses ditolak.').catch(() => {});
+    return false;
+  }
+  return true;
+}
+
+// ─── Register all handlers ─────────────────────────────────────────────────────
+function registerHandlers(bot) {
+
+  // ── Commands ─────────────────────────────────────────────────────────────────
+  bot.start(authMiddleware, async (ctx) => {
+    const session = getSession(ctx.chat.id);
+    const name    = ctx.from.first_name || 'bro';
+    await ctx.replyWithHTML(
+      `Halo <b>${name}</b>! 👋\n\nAku siap membantu. Ketik pesan atau pilih menu:`,
+      buildMainMenu(session)
+    );
+  });
+
+  bot.command('menu', authMiddleware, async (ctx) => {
+    await ctx.reply('Menu:', buildMainMenu(getSession(ctx.chat.id)));
+  });
+
+  bot.command('new', authMiddleware, async (ctx) => {
+    const session   = getSession(ctx.chat.id);
+    session.history = [];
+    saveSessions();
+    await ctx.reply('✅ Chat baru dimulai.');
+  });
+
+  bot.command('info', authMiddleware, async (ctx) => {
+    const session = getSession(ctx.chat.id);
+    await ctx.replyWithHTML(buildInfoText(session), buildMainMenu(session));
+  });
+
+  bot.command('admin', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return ctx.reply('⛔ Akses ditolak.');
+    const session     = getSession(ctx.chat.id);
+    session.adminMode = true;
+    saveSessions();
+    await ctx.replyWithHTML(
+      `<b>🔐 Admin Panel</b>\n\nMode admin aktif. Ketik pertanyaan langsung untuk analisis kode, atau pilih aksi di bawah.\n\n<i>AI: ${ADMIN_MODEL}</i>`,
+      adminMenu
+    );
+  });
+
+  // ── Main callbacks ────────────────────────────────────────────────────────────
+  bot.action('show_menu', authMiddleware, async (ctx) => {
+    await ctx.answerCbQuery();
+    await ctx.reply('Menu:', buildMainMenu(getSession(ctx.chat.id)));
+  });
+
+  bot.action('new_chat', authMiddleware, async (ctx) => {
+    const session   = getSession(ctx.chat.id);
+    session.history = [];
+    saveSessions();
+    await ctx.answerCbQuery('✅ Chat baru dimulai');
+    await ctx.reply('Chat baru dimulai. Silakan ketik pertanyaanmu.');
+  });
+
+  bot.action('clear_history', authMiddleware, async (ctx) => {
+    const session   = getSession(ctx.chat.id);
+    session.history = [];
+    saveSessions();
+    await ctx.answerCbQuery('🗑️ History dihapus');
+    await ctx.reply('History percakapan dihapus.');
+  });
+
+  bot.action('mode_menu',  authMiddleware, async (ctx) => { await ctx.answerCbQuery(); await ctx.reply('Pilih mode:', modeMenu); });
+  bot.action('model_menu', authMiddleware, async (ctx) => { await ctx.answerCbQuery(); await ctx.reply('Pilih model:', modelMenu); });
+
+  bot.action('info', authMiddleware, async (ctx) => {
+    const session = getSession(ctx.chat.id);
+    await ctx.answerCbQuery();
+    await ctx.replyWithHTML(buildInfoText(session), buildMainMenu(session));
+  });
+
+  // Mode actions
+  const MODE_ACTIONS = [
+    ['mode_general',  'general',  '💡 Mode General aktif'],
+    ['mode_coding',   'coding',   '🧠 Mode Coding aktif'],
+    ['mode_analyst',  'analyst',  '📊 Mode Analyst aktif'],
+    ['mode_creative', 'creative', '🎨 Mode Creative aktif'],
+  ];
+  for (const [action, mode, label] of MODE_ACTIONS) {
+    bot.action(action, authMiddleware, async (ctx) => {
+      const session = getSession(ctx.chat.id);
+      session.mode  = mode;
+      saveSessions();
+      await ctx.answerCbQuery(`✅ ${label}`);
+      await ctx.replyWithHTML(`<b>${label}</b>`);
+    });
+  }
+
+  // Model actions
+  const MODEL_ACTIONS = [
+    ['model_auto',           'auto',                  '🔄 Auto Cascade aktif'],
+    ['model_flash25',        MODELS.flash25,          '✨ Gemini Flash 2.5 aktif'],
+    ['model_pro',            MODELS.pro,              '🧠 Gemini Pro 2.5 aktif'],
+    ['model_flash',          MODELS.flash,            '🔥 Gemini Flash 2.0 aktif'],
+    ['model_lite',           MODELS.lite,             '⚡ Gemini Lite aktif'],
+    ['model_groq_instant',   GROQ_MODELS.instant,     '⚡ Llama 8B (Groq) aktif'],
+    ['model_groq_versatile', GROQ_MODELS.versatile,   '🦙 Llama 70B (Groq) aktif'],
+    ['model_groq_qwen',      GROQ_MODELS.qwen,        '🐉 Qwen3 32B (Groq) aktif'],
+  ];
+  for (const [action, modelKey, label] of MODEL_ACTIONS) {
+    bot.action(action, authMiddleware, async (ctx) => {
+      const session = getSession(ctx.chat.id);
+      session.model = modelKey;
+      saveSessions();
+      await ctx.answerCbQuery(`✅ ${label}`);
+      await ctx.replyWithHTML(`<b>${label}</b>`);
+    });
+  }
+
+  // ── Admin callbacks ───────────────────────────────────────────────────────────
+  bot.action('admin_panel', async (ctx) => {
+    if (!adminGuard(ctx)) return;
+    const session     = getSession(ctx.chat.id);
+    session.adminMode = true;
+    saveSessions();
+    await ctx.answerCbQuery();
+    await ctx.replyWithHTML(
+      `<b>🔐 Admin Panel</b>\n\nKetik pertanyaan atau pilih aksi:\n\n<i>AI: ${ADMIN_MODEL}</i>`,
+      adminMenu
+    );
+  });
+
+  bot.action('admin_exit', async (ctx) => {
+    if (!adminGuard(ctx)) return;
+    const session     = getSession(ctx.chat.id);
+    session.adminMode = false;
+    saveSessions();
+    await ctx.answerCbQuery('✅ Keluar dari admin mode');
+    await ctx.reply('Mode admin dinonaktifkan.', buildMainMenu(session));
+  });
+
+  bot.action('admin_status', async (ctx) => {
+    if (!adminGuard(ctx)) return;
+    await ctx.answerCbQuery();
+    const uptime = process.uptime();
+    const h = Math.floor(uptime / 3600);
+    const m = Math.floor((uptime % 3600) / 60);
+    const s = Math.floor(uptime % 60);
+    const totalSessions  = sessions.size;
+    const activeSessions = [...sessions.values()].filter(v => v.history?.length > 0).length;
+    const memMB = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
+    const txt = [
+      '<b>📊 System Status</b>', '',
+      `<b>Uptime:</b> <code>${h}j ${m}m ${s}d</code>`,
+      `<b>Memory:</b> <code>${memMB} MB heap</code>`,
+      `<b>Sessions total:</b> <code>${totalSessions}</code>`,
+      `<b>Sessions aktif:</b> <code>${activeSessions}</code>`, '',
+      '<b>Models:</b>',
+      `- Gemini primary: <code>${MODELS.flash25}</code>`,
+      `- Groq fallback: <code>${GROQ_MODELS.versatile}</code>`,
+      `- Admin AI: <code>${ADMIN_MODEL}</code>`, '',
+      `<b>Admin Groq:</b> <code>${groqAdmin ? 'aktif' : 'tidak tersedia'}</code>`,
+      `<b>Admin users:</b> <code>${ADMIN_USERS.length}</code>`,
+    ].join('\n');
+    await ctx.replyWithHTML(txt, adminMiniMenu);
+  });
+
+  bot.action('admin_reset_all', async (ctx) => {
+    if (!adminGuard(ctx)) return;
+    await ctx.answerCbQuery();
+    const count = [...sessions.values()].filter(v => v.history?.length > 0).length;
+    for (const [, s] of sessions) s.history = [];
+    saveSessions();
+    await ctx.replyWithHTML(
+      `<b>🧹 Reset Selesai</b>\n\n<code>${count}</code> session aktif dihapus.`,
+      adminMiniMenu
+    );
+  });
+
+  bot.action('admin_test', async (ctx) => {
+    if (!adminGuard(ctx)) return;
+    await ctx.answerCbQuery('🧪 Testing sanitizer...');
+    const sample = [
+      '**Bold markdown** dan __underline__',
+      '<h2>Heading dua</h2>',
+      '<ul><li>Item satu</li><li>Item dua</li></ul>',
+      'if (a < b && c > d) { return true; }',
+      '```js\nconst x = a < b ? \'less\' : \'more\';\n```',
+      'Ini <b>bold valid</b> dan <code>kode inline</code>.',
+    ].join('\n');
+    const result = sanitizeForTelegram(sample);
+    await ctx.replyWithHTML(
+      '<b>🧪 Test Sanitizer</b>\n\n<b>Input:</b>\n<pre><code>' + escapeHtml(sample) + '</code></pre>\n\n<b>Output:</b>\n' + result,
+      adminMiniMenu
+    );
+  });
+
+  bot.action('admin_diagnose', async (ctx) => {
+    if (!adminGuard(ctx)) return;
+    await ctx.answerCbQuery('🔍 Menganalisa kode...');
+    await ctx.reply('🔍 Mendiagnosa kode... (~15-30 detik)');
+    const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
+    try {
+      const result = await analyzeCode(
+        'Diagnosa kode ini secara mendalam. Temukan bug nyata atau potensial, issue kritis, dan hal yang perlu segera diperbaiki. Urutkan dari prioritas tertinggi ke terendah.'
+      );
+      clearInterval(typingInterval);
+      console.log('[👑 Admin] Diagnosa selesai');
+      await sendLong(ctx, result, adminMiniMenu);
+    } catch (err) {
+      clearInterval(typingInterval);
+      console.error('❌ [Admin Diagnose]:', err.message);
+      await ctx.replyWithHTML(`❌ Error: <code>${escapeHtml(err.message?.slice(0, 120))}</code>`, adminMiniMenu);
+    }
+  });
+
+  bot.action('admin_audit', async (ctx) => {
+    if (!adminGuard(ctx)) return;
+    await ctx.answerCbQuery('📋 Memulai full audit...');
+    await ctx.reply('📋 Melakukan full audit... (~30-60 detik)');
+    const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
+    try {
+      const result = await analyzeCode(
+        'Lakukan full audit komprehensif: arsitektur, keamanan, performa, maintainability, dan design patterns. Berikan skor 1-10 untuk setiap aspek dan rekomendasi spesifik.'
+      );
+      clearInterval(typingInterval);
+      console.log('[👑 Admin] Full audit selesai');
+      await sendLong(ctx, result, adminMiniMenu);
+    } catch (err) {
+      clearInterval(typingInterval);
+      console.error('❌ [Admin Audit]:', err.message);
+      await ctx.replyWithHTML(`❌ Error: <code>${escapeHtml(err.message?.slice(0, 120))}</code>`, adminMiniMenu);
+    }
+  });
+
+  // ── Handler: Text ─────────────────────────────────────────────────────────────
+  bot.on('text', authMiddleware, async (ctx) => {
+    const chatId   = ctx.chat.id;
+    const userText = ctx.message.text.trim();
+    const session  = getSession(chatId);
+
+    // Admin mode: route to code analyzer
+    if (session.adminMode && isAdmin(ctx.from.id)) {
+      console.log(`\n[👑 ADMIN] ${ctx.from.first_name} (${chatId}): ${userText.slice(0, 80)}`);
+      await ctx.sendChatAction('typing');
+      const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
+      try {
+        const result = await analyzeCode(userText);
+        clearInterval(typingInterval);
+        console.log(`[📤] [admin:${ADMIN_MODEL}] ${result.slice(0, 60).replace(/\n/g, ' ')}...`);
+        await sendLong(ctx, result, {
+          reply_parameters: { message_id: ctx.message.message_id },
+          ...adminMiniMenu,
+        });
+      } catch (err) {
+        clearInterval(typingInterval);
+        console.error('❌ [Admin Chat]:', err.message);
+        await ctx.replyWithHTML(
+          `❌ Error: <code>${escapeHtml(err.message?.slice(0, 120))}</code>`,
+          adminMiniMenu
+        );
+      }
+      return;
+    }
+
+    // Normal chat flow
+    console.log(`\n[📥] ${ctx.from.first_name} (${chatId}): ${userText.slice(0, 80)}`);
+    await ctx.sendChatAction('typing');
+    const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
+
+    try {
+      const { text, usedModel, provider } = await smartRequest(chatId, userText);
+      clearInterval(typingInterval);
+      console.log(`[📤] [${provider}:${usedModel}] ${text.slice(0, 60).replace(/\n/g, ' ')}...`);
+      await sendLong(ctx, text, {
+        reply_parameters: { message_id: ctx.message.message_id },
+        ...miniMenu,
+      });
+    } catch (err) {
+      clearInterval(typingInterval);
+      console.error('❌ [Error Text]:', err.message);
+      const isQuota = err.message?.includes('quota') || err.status === 429;
+      const errMsg  = isQuota
+        ? '⚠️ Rate limit semua provider tercapai. Tunggu sebentar dan coba lagi.'
+        : `❌ Error: <code>${escapeHtml(err.message?.slice(0, 120) ?? 'Unknown')}</code>`;
+      await ctx.replyWithHTML(errMsg).catch(() => ctx.reply(errMsg));
+    }
+  });
+
+  // ── Handler: Photo (Vision) ───────────────────────────────────────────────────
+  bot.on('photo', authMiddleware, async (ctx) => {
+    const chatId  = ctx.chat.id;
+    const caption = ctx.message.caption?.trim() || '';
+    const photo   = ctx.message.photo[ctx.message.photo.length - 1];
+
+    console.log(`\n[📸] ${ctx.from.first_name} kirim foto. Caption: "${caption}"`);
+    await ctx.sendChatAction('typing');
+    const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
+
+    try {
+      const fileLink = await ctx.telegram.getFileLink(photo.file_id);
+      const base64   = await downloadAsBase64(fileLink.href);
+      const imgParts = [{ inlineData: { mimeType: 'image/jpeg', data: base64 } }];
+
+      const { text, usedModel } = await smartRequest(chatId, caption, imgParts);
+      clearInterval(typingInterval);
+      console.log(`[📤] [gemini:${usedModel}] Vision: ${text.slice(0, 60).replace(/\n/g, ' ')}...`);
+
+      await sendLong(ctx, text, {
+        reply_parameters: { message_id: ctx.message.message_id },
+        ...miniMenu,
+      });
+    } catch (err) {
+      clearInterval(typingInterval);
+      console.error('❌ [Error Vision]:', err.message);
+      await ctx.replyWithHTML(`❌ Error analisis gambar: <code>${escapeHtml(err.message?.slice(0, 120))}</code>`)
+        .catch(() => ctx.reply('❌ Gagal analisis gambar.'));
+    }
+  });
+
+  // ── Handler: Document ─────────────────────────────────────────────────────────
+  bot.on('document', authMiddleware, async (ctx) => {
+    const chatId   = ctx.chat.id;
+    const doc      = ctx.message.document;
+    const caption  = ctx.message.caption?.trim() || '';
+    const mimeType = doc.mime_type || 'application/octet-stream';
+    const fileSize = doc.file_size || 0;
+
+    const MAX_BYTES = 5 * 1024 * 1024;
+    if (fileSize > MAX_BYTES) return ctx.reply('⚠️ File terlalu besar. Maksimal 5 MB.');
+
+    const isText = mimeType.startsWith('text/') || mimeType === 'application/json';
+    const isPdf  = mimeType === 'application/pdf';
+
+    if (!isText && !isPdf) {
+      return ctx.replyWithHTML(
+        `⚠️ Format tidak didukung: <code>${escapeHtml(mimeType)}</code>\n` +
+        'Didukung: PDF, TXT, JS, PY, JSON, HTML, CSS, MD'
+      );
+    }
+
+    console.log(`\n[📄] ${ctx.from.first_name} kirim file: ${doc.file_name} (${mimeType})`);
+    await ctx.sendChatAction('typing');
+    const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
+
+    try {
+      const fileLink = await ctx.telegram.getFileLink(doc.file_id);
+      const base64   = await downloadAsBase64(fileLink.href);
+
+      let result;
+      if (isPdf) {
+        const fileParts = [{ inlineData: { mimeType: 'application/pdf', data: base64 } }];
+        console.log('[Omni-Router] PDF detected -> Gemini only');
+        result = await askWithGemini(chatId,
+          caption || `Analisis dokumen PDF ini: ${doc.file_name}`,
+          fileParts,
+          [MODELS.flash25, MODELS.flash, MODELS.lite]
+        );
+      } else {
+        const textContent = Buffer.from(base64, 'base64').toString('utf8');
+        const prompt      = `File: ${doc.file_name}\n\n${textContent.slice(0, 8000)}\n\n${caption || 'Analisis file ini.'}`;
+        result = await smartRequest(chatId, prompt);
+      }
+
+      clearInterval(typingInterval);
+      console.log(`[📤] [${result.provider}:${result.usedModel}] Doc: ${result.text.slice(0, 60).replace(/\n/g, ' ')}...`);
+
+      await sendLong(ctx, result.text, {
+        reply_parameters: { message_id: ctx.message.message_id },
+        ...miniMenu,
+      });
+    } catch (err) {
+      clearInterval(typingInterval);
+      console.error('❌ [Error Doc]:', err.message);
+      await ctx.replyWithHTML(`❌ Error proses file: <code>${escapeHtml(err.message?.slice(0, 120))}</code>`)
+        .catch(() => ctx.reply('❌ Gagal proses file.'));
+    }
+  });
+}
+
+module.exports = { registerHandlers };
