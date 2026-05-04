@@ -25,7 +25,7 @@ const MODELS = {
   lite:    'gemini-2.0-flash-lite',
   flash:   'gemini-2.0-flash',
   flash25: 'gemini-2.5-flash',
-  pro:     'gemini-2.5-pro-preview-05-06',
+  pro:     'gemini-2.5-pro',
 };
 
 // Source: api.groq.com/openai/v1/models — verified May 2026 (live API check)

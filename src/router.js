@@ -21,7 +21,7 @@ function isComplex(text) {
 // ─── History Converter: Gemini → Groq (OpenAI format) ─────────────────────────
 function historyToGroq(history, systemPrompt) {
   const messages = [{ role: 'system', content: systemPrompt }];
-  for (const msg of history.slice(-20)) {
+  for (const msg of history.slice(-30)) {
     const textParts = msg.parts.filter(p => p.text);
     const hasMedia  = msg.parts.some(p => p.inlineData);
     const content   = textParts.map(p => p.text).join('')
@@ -46,7 +46,7 @@ async function askWithGemini(chatId, userMessage, imageParts = [], modelCascade 
   for (const modelId of modelCascade) {
     try {
       const model  = genAI.getGenerativeModel({ model: modelId, systemInstruction: systemPrompt });
-      const chat   = model.startChat({ history: session.history.slice(-20) });
+      const chat   = model.startChat({ history: session.history.slice(-30) });
       const result = await chat.sendMessage(msgParts);
       const text   = result.response.text();
 

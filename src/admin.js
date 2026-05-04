@@ -18,7 +18,7 @@ const ADMIN_FILES = [
   'index.js',
   'src/config.js',
   'src/prompts.js',
-  'src/session.js',
+  'src/utils/session.js',
   'src/router.js',
   'src/sanitizer.js',
   'src/admin.js',
