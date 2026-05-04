@@ -1,7 +1,7 @@
 'use strict';
 
 const { ALLOWED_USERS, ADMIN_USERS, MODELS, GROQ_MODELS, MODEL_LABELS } = require('./config');
-const { sessions, getSession, saveSessions } = require('./session');
+const { sessions, getSession, saveSession, saveSessions } = require('./utils/session');
 const { groq, smartRequest, askWithGemini } = require('./router');
 const { sanitizeForTelegram, escapeHtml, downloadAsBase64, sendLong } = require('./sanitizer');
 const { groqAdmin, ADMIN_MODEL, isAdmin, analyzeCode } = require('./admin');
@@ -54,7 +54,7 @@ function adminGuard(ctx) {
 // ─── Register all handlers ─────────────────────────────────────────────────────
 function registerHandlers(bot) {
 
-  // ── Commands ─────────────────────────────────────────────────────────────────
+  // ── Commands ──────────────────────────────────────────────────────────────────
   bot.start(authMiddleware, async (ctx) => {
     const session = getSession(ctx.chat.id);
     const name    = ctx.from.first_name || 'bro';
@@ -71,7 +71,7 @@ function registerHandlers(bot) {
   bot.command('new', authMiddleware, async (ctx) => {
     const session   = getSession(ctx.chat.id);
     session.history = [];
-    saveSessions();
+    saveSession(ctx.chat.id);
     await ctx.reply('✅ Chat baru dimulai.');
   });
 
@@ -84,7 +84,7 @@ function registerHandlers(bot) {
     if (!isAdmin(ctx.from.id)) return ctx.reply('⛔ Akses ditolak.');
     const session     = getSession(ctx.chat.id);
     session.adminMode = true;
-    saveSessions();
+    saveSession(ctx.chat.id);
     await ctx.replyWithHTML(
       `<b>🔐 Admin Panel</b>\n\nMode admin aktif. Ketik pertanyaan langsung untuk analisis kode, atau pilih aksi di bawah.\n\n<i>AI: ${ADMIN_MODEL}</i>`,
       adminMenu
@@ -100,7 +100,7 @@ function registerHandlers(bot) {
   bot.action('new_chat', authMiddleware, async (ctx) => {
     const session   = getSession(ctx.chat.id);
     session.history = [];
-    saveSessions();
+    saveSession(ctx.chat.id);
     await ctx.answerCbQuery('✅ Chat baru dimulai');
     await ctx.reply('Chat baru dimulai. Silakan ketik pertanyaanmu.');
   });
@@ -108,7 +108,7 @@ function registerHandlers(bot) {
   bot.action('clear_history', authMiddleware, async (ctx) => {
     const session   = getSession(ctx.chat.id);
     session.history = [];
-    saveSessions();
+    saveSession(ctx.chat.id);
     await ctx.answerCbQuery('🗑️ History dihapus');
     await ctx.reply('History percakapan dihapus.');
   });
@@ -133,7 +133,7 @@ function registerHandlers(bot) {
     bot.action(action, authMiddleware, async (ctx) => {
       const session = getSession(ctx.chat.id);
       session.mode  = mode;
-      saveSessions();
+      saveSession(ctx.chat.id);
       await ctx.answerCbQuery(`✅ ${label}`);
       await ctx.replyWithHTML(`<b>${label}</b>`);
     });
@@ -154,7 +154,7 @@ function registerHandlers(bot) {
     bot.action(action, authMiddleware, async (ctx) => {
       const session = getSession(ctx.chat.id);
       session.model = modelKey;
-      saveSessions();
+      saveSession(ctx.chat.id);
       await ctx.answerCbQuery(`✅ ${label}`);
       await ctx.replyWithHTML(`<b>${label}</b>`);
     });
@@ -165,7 +165,7 @@ function registerHandlers(bot) {
     if (!adminGuard(ctx)) return;
     const session     = getSession(ctx.chat.id);
     session.adminMode = true;
-    saveSessions();
+    saveSession(ctx.chat.id);
     await ctx.answerCbQuery();
     await ctx.replyWithHTML(
       `<b>🔐 Admin Panel</b>\n\nKetik pertanyaan atau pilih aksi:\n\n<i>AI: ${ADMIN_MODEL}</i>`,
@@ -177,7 +177,7 @@ function registerHandlers(bot) {
     if (!adminGuard(ctx)) return;
     const session     = getSession(ctx.chat.id);
     session.adminMode = false;
-    saveSessions();
+    saveSession(ctx.chat.id);
     await ctx.answerCbQuery('✅ Keluar dari admin mode');
     await ctx.reply('Mode admin dinonaktifkan.', buildMainMenu(session));
   });
@@ -204,6 +204,7 @@ function registerHandlers(bot) {
       `- Admin AI: <code>${ADMIN_MODEL}</code>`, '',
       `<b>Admin Groq:</b> <code>${groqAdmin ? 'aktif' : 'tidak tersedia'}</code>`,
       `<b>Admin users:</b> <code>${ADMIN_USERS.length}</code>`,
+      `<b>Storage:</b> <code>NeonDB (PostgreSQL)</code>`,
     ].join('\n');
     await ctx.replyWithHTML(txt, adminMiniMenu);
   });

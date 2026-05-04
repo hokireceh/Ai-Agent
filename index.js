@@ -2,18 +2,22 @@ require('dotenv').config();
 const { Telegraf } = require('telegraf');
 
 const { BOT_TOKEN, MODELS, GROQ_MODELS } = require('./src/config');
-const { groq }              = require('./src/router');
-const { saveSessions }      = require('./src/session');
-const { registerHandlers }  = require('./src/handlers');
+const { groq }               = require('./src/router');
+const { initSessions, saveSessions } = require('./src/utils/session');
+const { registerHandlers }   = require('./src/handlers');
 
-const bot = new Telegraf(BOT_TOKEN);
-registerHandlers(bot);
+(async () => {
+  await initSessions();
 
-bot.launch({ dropPendingUpdates: true });
+  const bot = new Telegraf(BOT_TOKEN);
+  registerHandlers(bot);
 
-console.log('🤖 Bot aktif — Mode: Polling | Session: Persistent File');
-console.log(`📦 Gemini: ${MODELS.flash25} | ${MODELS.pro} | ${MODELS.flash} | ${MODELS.lite}`);
-console.log(`📦 Groq  : ${groq ? `${GROQ_MODELS.instant} | ${GROQ_MODELS.versatile} | ${GROQ_MODELS.qwen}` : 'DISABLED (no GROQ_API_KEY)'}`);
+  bot.launch({ dropPendingUpdates: true });
 
-process.once('SIGINT',  () => { saveSessions(); bot.stop('SIGINT'); });
-process.once('SIGTERM', () => { saveSessions(); bot.stop('SIGTERM'); });
+  console.log('🤖 Bot aktif — Mode: Polling | Storage: NeonDB');
+  console.log(`📦 Gemini: ${MODELS.flash25} | ${MODELS.pro} | ${MODELS.flash} | ${MODELS.lite}`);
+  console.log(`📦 Groq  : ${groq ? `${GROQ_MODELS.instant} | ${GROQ_MODELS.versatile} | ${GROQ_MODELS.qwen}` : 'DISABLED (no GROQ_API_KEY)'}`);
+
+  process.once('SIGINT',  () => { saveSessions(); bot.stop('SIGINT'); });
+  process.once('SIGTERM', () => { saveSessions(); bot.stop('SIGTERM'); });
+})();

@@ -5,7 +5,7 @@ const Groq = require('groq-sdk');
 
 const { GEMINI_KEY, GROQ_KEY, MODELS, GROQ_MODELS } = require('./config');
 const { SYSTEM_PROMPTS } = require('./prompts');
-const { getSession, saveSessions } = require('./session');
+const { getSession, saveSession } = require('./utils/session');
 
 const genAI = new GoogleGenerativeAI(GEMINI_KEY);
 const groq  = GROQ_KEY ? new Groq({ apiKey: GROQ_KEY }) : null;
@@ -56,7 +56,7 @@ async function askWithGemini(chatId, userMessage, imageParts = [], modelCascade 
       session.history.push(userPart);
       session.history.push({ role: 'model', parts: [{ text }] });
       if (session.history.length > 40) session.history = session.history.slice(-40);
-      saveSessions();
+      saveSession(chatId);
 
       return { text, usedModel: modelId, provider: 'gemini' };
 
@@ -97,7 +97,7 @@ async function askWithGroq(chatId, userMessage, modelId) {
   session.history.push({ role: 'user',  parts: [{ text: userMessage }] });
   session.history.push({ role: 'model', parts: [{ text }] });
   if (session.history.length > 40) session.history = session.history.slice(-40);
-  saveSessions();
+  saveSession(chatId);
 
   return { text, usedModel: modelId, provider: 'groq' };
 }

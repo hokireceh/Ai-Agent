@@ -10,6 +10,7 @@
     "@google/generative-ai": "^0.21.0",
     "dotenv": "^16.4.5",
     "groq-sdk": "^1.1.2",
+    "pg": "^8.20.0",
     "telegraf": "^4.16.3"
   },
   "devDependencies": {
