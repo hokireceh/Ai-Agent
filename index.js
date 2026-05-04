@@ -67,13 +67,26 @@ Karakter:
 - Gunakan Bahasa Indonesia. Bahasa Inggris hanya untuk istilah teknis dan kode
 - Jujur — kalau tidak tahu, bilang tidak tahu
 
-Tag HTML yang BOLEH dipakai (hanya ini yang valid di Telegram):
-- <b>bold</b> untuk poin penting
-- <code>kode inline</code> untuk kode pendek / nama fungsi / variabel
-- <pre><code>blok kode</code></pre> untuk kode panjang
-- <i>italic</i> seperlunya
-- Paragraf pendek, max 3-4 baris per blok
-- DILARANG KERAS: **, __, ##, tabel, <ul>, <ol>, <li>, <h1>-<h6>, <br>, <hr>, semua tag HTML lain selain yang tercantum di atas`,
+FORMAT OUTPUT — WAJIB IKUTI PERSIS:
+Hanya gunakan 4 tag HTML ini (tidak ada yang lain):
+  <b>teks</b>        → teks tebal
+  <i>teks</i>        → teks miring
+  <code>teks</code>  → kode inline / nama variabel / fungsi
+  <pre><code>
+teks
+  </code></pre>      → blok kode (selalu gunakan ini untuk kode multi-baris)
+
+DILARANG KERAS (sistem akan membersihkannya, tapi jangan pakai sama sekali):
+  - Markdown: **, __, ##, backtick triple
+  - Tag HTML lain: <ul>, <ol>, <li>, <br>, <hr>, <h1>-<h6>, <p>, <div>, <span>
+  - Tabel
+
+Untuk daftar/list: gunakan karakter strip manual, contoh:
+  - Item pertama
+  - Item kedua
+  - Item ketiga
+
+Paragraf pendek, max 3-4 baris per blok.`,
 
   coding: `Kamu adalah senior software engineer dengan 10+ tahun pengalaman.
 
@@ -84,12 +97,23 @@ Perilaku:
 - Review kritis — tunjukkan potensi bug, edge case, dan improvement
 - Pertimbangkan: performa, keamanan, maintainability
 
-Tag HTML yang BOLEH dipakai (hanya ini yang valid di Telegram):
-- <pre><code class="language-xxx">kode</code></pre> untuk semua blok kode
-- <code>inline</code> untuk nama variabel / fungsi / perintah
-- <b>bold</b> untuk poin kritis
-- <i>italic</i> untuk catatan / caveat
-- DILARANG KERAS: **, __, ##, tabel, <ul>, <ol>, <li>, <h1>-<h6>, <br>, <hr>, semua tag HTML lain selain yang tercantum di atas`,
+FORMAT OUTPUT — WAJIB IKUTI PERSIS:
+Hanya gunakan 4 tag HTML ini (tidak ada yang lain):
+  <b>teks</b>        → poin kritis
+  <i>teks</i>        → catatan / caveat
+  <code>teks</code>  → nama variabel / fungsi / perintah inline
+  <pre><code>
+teks
+  </code></pre>      → SEMUA blok kode (wajib gunakan ini, bukan backtick)
+
+DILARANG KERAS:
+  - Markdown: **, __, ##, backtick triple
+  - Tag HTML lain: <ul>, <ol>, <li>, <br>, <hr>, <h1>-<h6>, <p>, <div>, <span>
+  - Tabel
+
+Untuk daftar langkah: gunakan angka atau strip manual:
+  1. Langkah pertama
+  2. Langkah kedua`,
 
   analyst: `Kamu adalah analis yang tajam dan terstruktur.
 
@@ -100,11 +124,23 @@ Perilaku:
 - Kesimpulan actionable, bukan sekadar observasi
 - Jika ada data/angka, interpretasikan — jangan hanya kutip
 
-Tag HTML yang BOLEH dipakai (hanya ini yang valid di Telegram):
-- <b>bold</b> untuk heading tiap bagian
-- <code>angka / data penting</code>
-- Struktur: Konteks → Analisis → Implikasi → Rekomendasi
-- DILARANG KERAS: **, __, ##, tabel, <ul>, <ol>, <li>, <h1>-<h6>, <br>, <hr>, semua tag HTML lain selain yang tercantum di atas`,
+FORMAT OUTPUT — WAJIB IKUTI PERSIS:
+Hanya gunakan 4 tag HTML ini (tidak ada yang lain):
+  <b>teks</b>        → heading tiap bagian analisis
+  <i>teks</i>        → nuansa / catatan
+  <code>teks</code>  → angka / data penting
+  <pre><code>
+teks
+  </code></pre>      → blok kode jika diperlukan
+
+Struktur jawaban: Konteks → Analisis → Implikasi → Rekomendasi
+
+DILARANG KERAS:
+  - Markdown: **, __, ##, backtick triple
+  - Tag HTML lain: <ul>, <ol>, <li>, <br>, <hr>, <h1>-<h6>, <p>, <div>, <span>
+  - Tabel
+
+Untuk daftar: gunakan strip manual (- item)`,
 
   creative: `Kamu adalah kreator ide yang bebas dan tidak terbatas.
 
@@ -115,10 +151,17 @@ Perilaku:
 - Boleh out-of-the-box, kombinasikan konsep dari domain berbeda
 - Pendek dan punchy, bukan bertele-tele
 
-Tag HTML yang BOLEH dipakai (hanya ini yang valid di Telegram):
-- <b>bold</b> untuk judul ide
-- <i>italic</i> untuk nuansa dan detail
-- DILARANG KERAS: **, __, ##, tabel, <ul>, <ol>, <li>, <h1>-<h6>, <br>, <hr>, semua tag HTML lain selain yang tercantum di atas`,
+FORMAT OUTPUT — WAJIB IKUTI PERSIS:
+Hanya gunakan 4 tag HTML ini (tidak ada yang lain):
+  <b>teks</b>  → judul ide
+  <i>teks</i>  → nuansa dan detail atmosfer
+
+DILARANG KERAS:
+  - Markdown: **, __, ##, backtick triple
+  - Tag HTML lain: <ul>, <ol>, <li>, <br>, <hr>, <h1>-<h6>, <p>, <div>, <span>
+  - Tabel
+
+Untuk daftar: gunakan strip manual (- item)`,
 };
 
 // ─── Session Persistence ──────────────────────────────────────────────────────
@@ -359,6 +402,65 @@ async function smartRequest(chatId, userMessage, imageParts = []) {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// Sanitize AI response → safe Telegram HTML
+// Pipeline: markdown → illegal-tag conversion → strip → escape bare angles → restore valid tags
+function sanitizeForTelegram(raw = '') {
+  let text = raw;
+
+  // 1. Markdown triple-backtick → <pre><code> (escape content inside)
+  text = text.replace(/```[\w]*\n?([\s\S]*?)```/g, (_, code) => {
+    const safe = code.trim()
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+    return `<pre><code>${safe}</code></pre>`;
+  });
+
+  // 2. Inline backtick → <code> (escape content inside)
+  text = text.replace(/`([^`\n]+)`/g, (_, code) => {
+    const safe = code
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+    return `<code>${safe}</code>`;
+  });
+
+  // 3. Protect valid Telegram tags with placeholders
+  const saved = [];
+  const VALID = /(<\/?(b|i|s|u|code|pre|a)(?:\s[^>]*)?>)/gi;
+  text = text.replace(VALID, (match) => {
+    saved.push(match);
+    return `\x00${saved.length - 1}\x00`;
+  });
+
+  // 4. Convert illegal tags to plain-text equivalents
+  text = text.replace(/<br\s*\/?>/gi, '\n');
+  text = text.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (_, c) =>
+    '- ' + c.replace(/<[^>]*>/g, '').trim() + '\n'
+  );
+  text = text.replace(/<\/?(?:ul|ol)[^>]*>/gi, '');
+  text = text.replace(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi, (_, c) =>
+    c.replace(/<[^>]*>/g, '').trim() + '\n'
+  );
+
+  // 5. Strip any remaining unknown tags
+  text = text.replace(/<[^>]+>/g, '');
+
+  // 6. Escape bare & < > that survived (not inside placeholders)
+  text = text.replace(/&(?!amp;|lt;|gt;|quot;|#\d+;|#x[\da-f]+;)/gi, '&amp;');
+  text = text.replace(/</g, '&lt;');
+  text = text.replace(/>/g, '&gt;');
+
+  // 7. Restore valid tags
+  text = text.replace(/\x00(\d+)\x00/g, (_, i) => saved[+i]);
+
+  // 8. Collapse 3+ consecutive blank lines → 2
+  text = text.replace(/\n{3,}/g, '\n\n');
+
+  return text.trim();
+}
+
 function escapeHtml(text = '') {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -369,8 +471,10 @@ async function downloadAsBase64(url) {
   return Buffer.from(await res.arrayBuffer()).toString('base64');
 }
 
-async function sendLong(ctx, text, extra = {}) {
-  const MAX = 4000;
+async function sendLong(ctx, raw, extra = {}) {
+  const text = sanitizeForTelegram(raw);
+  const MAX  = 4000;
+
   if (text.length <= MAX) {
     try { return await ctx.replyWithHTML(text, extra); }
     catch { return await ctx.reply(text, extra); }

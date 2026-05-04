@@ -98,7 +98,9 @@ Trigger: `hasCode || isDeep || words > 80`
    - HTML lain: `<br>`, `<hr>`, `<p>`, `<div>`, `<span>`, `<table>`, `<tr>`, `<td>`
 3. Paragraf pendek — max 3-4 baris per blok
 4. Tidak ada disclaimer, peringatan, atau "sebagai AI..." yang tidak perlu
-5. Framing aturan dalam system prompt: gunakan "Tag HTML yang BOLEH dipakai (hanya ini yang valid di Telegram)" — bukan "Format WAJIB" — agar model lebih patuh
+5. Framing system prompt: gunakan "FORMAT OUTPUT — WAJIB IKUTI PERSIS" + "Hanya gunakan 4 tag HTML ini" + daftar eksplisit DILARANG KERAS
+6. Untuk list selalu instruksikan: "Untuk daftar/list: gunakan karakter strip manual (- item)"
+7. **Sanitizer berlapis wajib dijalankan** sebelum setiap kirim pesan — lihat bagian 4a di bawah
 
 ### Mode: `general` (default)
 - Adaptif antara casual dan teknis
@@ -118,6 +120,28 @@ Trigger: `hasCode || isDeep || words > 80`
 ### Mode: `creative`
 - Karakter: kreator bebas, out-of-the-box
 - Berikan variasi / alternatif, punchy bukan bertele-tele
+
+---
+
+## 4a. Sanitizer Pipeline (`sanitizeForTelegram`)
+
+Dijalankan di `sendLong()` sebelum setiap pengiriman pesan. Defense-in-depth: meski sistem prompt sudah ketat, sanitizer tetap wajib sebagai layer kedua.
+
+```
+Input raw AI text
+  │
+  ├─ 1. Markdown ``` → <pre><code>...</code></pre>  (konten di-escape)
+  ├─ 2. Inline `backtick` → <code>...</code>        (konten di-escape)
+  ├─ 3. Protect valid tags dengan placeholder \x00N\x00
+  ├─ 4. <br> → \n | <li> → "- text\n" | <ul>/<ol> → strip | <hN> → text
+  ├─ 5. Strip semua tag HTML tersisa
+  ├─ 6. Escape bare & → &amp; | < → &lt; | > → &gt;
+  ├─ 7. Restore valid tags dari placeholder
+  └─ 8. Collapse 3+ blank lines → 2
+```
+
+**Tag yang valid & diproteksi:** `<b>`, `<i>`, `<s>`, `<u>`, `<code>`, `<pre>`, `<a>`
+**Semua tag lain:** dikonversi ke teks atau di-strip
 
 ---
 

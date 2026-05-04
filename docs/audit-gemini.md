@@ -33,6 +33,11 @@
   - Tambahkan daftar eksplisit yang DILARANG: `<ul>`, `<ol>`, `<li>`, `<h1>`-`<h6>`, `<br>`, `<hr>`
 - **Catatan:** Framing positif ("yang boleh") + daftar negatif eksplisit lebih efektif daripada hanya framing negatif
 
+### ❌ Issue #006: Sanitizer tidak berjalan → tag `<ul>/<li>` sampai ke Telegram (FIXED)
+- **Root cause:** Tidak ada layer sanitasi di antara AI output dan `ctx.replyWithHTML`
+- **Fix:** Fungsi `sanitizeForTelegram()` di-inject ke `sendLong()` — semua pesan keluar melewati pipeline 8-step
+- **Pipeline:** markdown→HTML → protect valid tags → illegal tag conversion → strip → escape → restore
+
 ### ❌ Issue #001: `gemini-1.5-flash` → 404 Not Found (FIXED)
 - **Status:** Deprecated di endpoint v1beta per Mei 2026
 - **Error:** `models/gemini-1.5-flash is not found for API version v1beta`
