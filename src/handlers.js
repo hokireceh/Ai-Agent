@@ -2,9 +2,13 @@
 
 const { ALLOWED_USERS, ADMIN_USERS, MODELS, GROQ_MODELS, MODEL_LABELS } = require('./config');
 const { sessions, getSession, saveSession, saveSessions } = require('./utils/session');
-const { groq, smartRequest, askWithGemini } = require('./router');
+const { groq, smartRequest, askWithGemini }               = require('./router');
 const { sanitizeForTelegram, escapeHtml, downloadAsBase64, sendLong } = require('./sanitizer');
-const { groqAdmin, ADMIN_MODEL, isAdmin, analyzeCode } = require('./admin');
+const {
+  groqAdmin, ADMIN_MODEL, isAdmin,
+  analyzeCode, analyzeWithContext,
+  getSystemHealth, getPM2Logs, getDBHealth,
+} = require('./admin');
 const { buildMainMenu, modeMenu, modelMenu, miniMenu, adminMenu, adminMiniMenu } = require('./menus');
 
 // ─── Auth ──────────────────────────────────────────────────────────────────────
@@ -40,6 +44,53 @@ function buildInfoText(session) {
     groq ? `🦙 <code>${GROQ_MODELS.versatile}</code>` : '',
     groq ? `🐉 <code>${GROQ_MODELS.qwen}</code>`      : '',
   ].filter(l => l !== '').join('\n');
+}
+
+// ─── System Status Text ────────────────────────────────────────────────────────
+async function buildStatusText() {
+  const h  = getSystemHealth();
+  const db = await getDBHealth();
+  const uptime = h.uptimeFormatted;
+  const totalSessions  = sessions.size;
+  const activeSessions = [...sessions.values()].filter(v => v.history?.length > 0).length;
+
+  const lines = [
+    '<b>📊 System Status</b>', '',
+    `<b>Uptime:</b> <code>${uptime}</code>`,
+    `<b>Heap:</b> <code>${h.heapUsedMB} MB / ${h.heapTotalMB} MB</code>`,
+    `<b>RSS:</b> <code>${h.rssMB} MB</code>`,
+    `<b>System RAM:</b> <code>${h.systemRamUsedMB} MB / ${h.systemRamTotalMB} MB (${h.ramUsedPct}%)</code>`,
+    `<b>CPU Load:</b> <code>${h.loadAvg1m} (1m) | ${h.loadAvg5m} (5m) | ${h.loadAvg15m} (15m)</code>`,
+    `<b>Node.js:</b> <code>${h.nodeVersion}</code>`,
+    `<b>Environment:</b> <code>${h.env}</code>`,
+  ];
+
+  if (h.extendedReport) {
+    lines.push(`<b>OS Uptime:</b> <code>${h.osUptime}</code>`);
+    lines.push(`<b>Hostname:</b> <code>${h.hostname}</code>`);
+    lines.push(`<b>CPU Status:</b> ${h.loadWarning}`);
+    lines.push(`<b>RAM Status:</b> ${h.ramWarning}`);
+  }
+
+  lines.push('');
+  lines.push('<b>Sessions total:</b> <code>' + totalSessions + '</code>');
+  lines.push('<b>Sessions aktif:</b> <code>' + activeSessions + '</code>');
+  lines.push('');
+  lines.push('<b>NeonDB:</b>');
+  if (db.status === 'OK') {
+    lines.push(`- Status: <code>OK</code> | Latency: <code>${db.latencyMs}ms</code>`);
+    lines.push(`- Total: <code>${db.totalSessions}</code> | Aktif: <code>${db.activeSessions}</code>`);
+  } else {
+    lines.push(`- Status: <code>ERROR</code>`);
+    lines.push(`- <code>${escapeHtml(db.error ?? '')}</code>`);
+  }
+  lines.push('');
+  lines.push(`<b>Gemini primary:</b> <code>${MODELS.flash25}</code>`);
+  lines.push(`<b>Groq fallback:</b> <code>${GROQ_MODELS.versatile}</code>`);
+  lines.push(`<b>Admin AI:</b> <code>${ADMIN_MODEL}</code>`);
+  lines.push(`<b>Groq Admin:</b> <code>${groqAdmin ? 'aktif' : 'tidak tersedia'}</code>`);
+
+  return lines.join('\n');
 }
 
 // ─── Admin guard ───────────────────────────────────────────────────────────────
@@ -182,31 +233,16 @@ function registerHandlers(bot) {
     await ctx.reply('Mode admin dinonaktifkan.', buildMainMenu(session));
   });
 
+  // ── Admin Status: sekarang async + DB + system health ─────────────────────────
   bot.action('admin_status', async (ctx) => {
     if (!adminGuard(ctx)) return;
     await ctx.answerCbQuery();
-    const uptime = process.uptime();
-    const h = Math.floor(uptime / 3600);
-    const m = Math.floor((uptime % 3600) / 60);
-    const s = Math.floor(uptime % 60);
-    const totalSessions  = sessions.size;
-    const activeSessions = [...sessions.values()].filter(v => v.history?.length > 0).length;
-    const memMB = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
-    const txt = [
-      '<b>📊 System Status</b>', '',
-      `<b>Uptime:</b> <code>${h}j ${m}m ${s}d</code>`,
-      `<b>Memory:</b> <code>${memMB} MB heap</code>`,
-      `<b>Sessions total:</b> <code>${totalSessions}</code>`,
-      `<b>Sessions aktif:</b> <code>${activeSessions}</code>`, '',
-      '<b>Models:</b>',
-      `- Gemini primary: <code>${MODELS.flash25}</code>`,
-      `- Groq fallback: <code>${GROQ_MODELS.versatile}</code>`,
-      `- Admin AI: <code>${ADMIN_MODEL}</code>`, '',
-      `<b>Admin Groq:</b> <code>${groqAdmin ? 'aktif' : 'tidak tersedia'}</code>`,
-      `<b>Admin users:</b> <code>${ADMIN_USERS.length}</code>`,
-      `<b>Storage:</b> <code>NeonDB (PostgreSQL)</code>`,
-    ].join('\n');
-    await ctx.replyWithHTML(txt, adminMiniMenu);
+    try {
+      const txt = await buildStatusText();
+      await ctx.replyWithHTML(txt, adminMiniMenu);
+    } catch (err) {
+      await ctx.replyWithHTML(`❌ Error status: <code>${escapeHtml(err.message)}</code>`, adminMiniMenu);
+    }
   });
 
   bot.action('admin_reset_all', async (ctx) => {
@@ -239,17 +275,20 @@ function registerHandlers(bot) {
     );
   });
 
+  // ── Deep Audit: sekarang gabungkan code + logs + health + DB ─────────────────
   bot.action('admin_diagnose', async (ctx) => {
     if (!adminGuard(ctx)) return;
-    await ctx.answerCbQuery('🔍 Menganalisa kode...');
-    await ctx.reply('🔍 Mendiagnosa kode... (~15-30 detik)');
+    await ctx.answerCbQuery('🔍 Memulai deep audit...');
+    await ctx.reply('🔍 Mendiagnosa kode, log, dan kondisi sistem... (~20-40 detik)');
     const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
     try {
-      const result = await analyzeCode(
-        'Diagnosa kode ini secara mendalam. Temukan bug nyata atau potensial, issue kritis, dan hal yang perlu segera diperbaiki. Urutkan dari prioritas tertinggi ke terendah.'
+      const result = await analyzeWithContext(
+        'Diagnosa bot ini secara mendalam. Gabungkan analisa source code, log runtime, dan kondisi sistem. ' +
+        'Temukan bug nyata, error berulang, indikasi memory leak, dan masalah performa. ' +
+        'Urutkan dari prioritas tertinggi ke terendah.'
       );
       clearInterval(typingInterval);
-      console.log('[👑 Admin] Diagnosa selesai');
+      console.log('[👑 Admin] Deep diagnosis selesai');
       await sendLong(ctx, result, adminMiniMenu);
     } catch (err) {
       clearInterval(typingInterval);
@@ -261,7 +300,7 @@ function registerHandlers(bot) {
   bot.action('admin_audit', async (ctx) => {
     if (!adminGuard(ctx)) return;
     await ctx.answerCbQuery('📋 Memulai full audit...');
-    await ctx.reply('📋 Melakukan full audit... (~30-60 detik)');
+    await ctx.reply('📋 Melakukan full audit komprehensif... (~30-60 detik)');
     const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
     try {
       const result = await analyzeCode(
@@ -289,7 +328,7 @@ function registerHandlers(bot) {
       await ctx.sendChatAction('typing');
       const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
       try {
-        const result = await analyzeCode(userText);
+        const result = await analyzeWithContext(userText);
         clearInterval(typingInterval);
         console.log(`[📤] [admin:${ADMIN_MODEL}] ${result.slice(0, 60).replace(/\n/g, ' ')}...`);
         await sendLong(ctx, result, {

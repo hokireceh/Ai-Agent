@@ -2,15 +2,17 @@ require('dotenv').config();
 const { Telegraf } = require('telegraf');
 
 const { BOT_TOKEN, MODELS, GROQ_MODELS } = require('./src/config');
-const { groq }               = require('./src/router');
-const { initSessions, saveSessions } = require('./src/utils/session');
-const { registerHandlers }   = require('./src/handlers');
+const { groq }                           = require('./src/router');
+const { initSessions, saveSessions }     = require('./src/utils/session');
+const { registerHandlers }               = require('./src/handlers');
+const { initScheduler }                  = require('./src/scheduler');
 
 (async () => {
   await initSessions();
 
   const bot = new Telegraf(BOT_TOKEN);
   registerHandlers(bot);
+  initScheduler(bot);
 
   bot.launch({ dropPendingUpdates: true });
 
