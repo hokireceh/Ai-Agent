@@ -13,3 +13,8 @@ author = 49249418
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npm install && node index.js"
+
+[userenv]
+
+[userenv.shared]
+ADMIN_USER_IDS = "1170158500"

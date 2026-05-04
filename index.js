@@ -56,6 +56,14 @@ const MODEL_SHORT = {
   [GROQ_MODELS.qwen]:      'Qwen3 32B',
 };
 
+// ─── Admin Config ──────────────────────────────────────────────────────────────
+const ADMIN_USERS    = process.env.ADMIN_USER_IDS
+  ? process.env.ADMIN_USER_IDS.split(',').map(Number)
+  : [];
+const GROQ_ADMIN_KEY = process.env.GROQ_ADMIN_API_KEY || GROQ_KEY;
+const groqAdmin      = GROQ_ADMIN_KEY ? new Groq({ apiKey: GROQ_ADMIN_KEY }) : null;
+const ADMIN_MODEL    = GROQ_MODELS.qwen; // dedicated instance for code analysis
+
 // ─── System Prompts per Mode (rules: docs/prompt-audit.md) ───────────────────
 const SYSTEM_PROMPTS = {
   general: `Kamu adalah asisten AI yang cerdas, adaptif, dan to the point.
@@ -189,7 +197,7 @@ const sessions = loadSessions();
 function getSession(chatId) {
   const key = String(chatId);
   if (!sessions.has(key)) {
-    sessions.set(key, { history: [], mode: 'general', model: 'auto' });
+    sessions.set(key, { history: [], mode: 'general', model: 'auto', adminMode: false });
   }
   return sessions.get(key);
 }
@@ -533,6 +541,81 @@ const miniMenu = Markup.inlineKeyboard([
   [Markup.button.callback('📋 Menu', 'show_menu'), Markup.button.callback('💬 Chat Baru', 'new_chat')],
 ]);
 
+const adminMenu = Markup.inlineKeyboard([
+  [Markup.button.callback('🔍 Diagnosa Kode', 'admin_diagnose'), Markup.button.callback('📋 Full Audit', 'admin_audit')],
+  [Markup.button.callback('📊 System Status', 'admin_status'), Markup.button.callback('🧹 Reset Semua Session', 'admin_reset_all')],
+  [Markup.button.callback('🧪 Test Sanitizer', 'admin_test'), Markup.button.callback('❌ Keluar Admin', 'admin_exit')],
+]);
+
+const adminMiniMenu = Markup.inlineKeyboard([
+  [Markup.button.callback('🔍 Diagnosa', 'admin_diagnose'), Markup.button.callback('📋 Audit', 'admin_audit')],
+  [Markup.button.callback('🏠 Admin Panel', 'admin_panel'), Markup.button.callback('❌ Keluar', 'admin_exit')],
+]);
+
+// ─── Admin: Helpers ────────────────────────────────────────────────────────────
+function isAdmin(userId) {
+  return ADMIN_USERS.length > 0 && ADMIN_USERS.includes(userId);
+}
+
+const ADMIN_FILES = [
+  'index.js',
+  'docs/prompt-audit.md',
+  'docs/audit-gemini.md',
+  'docs/audit-groq.md',
+  'package.json',
+  'replit.md',
+];
+
+function readProjectFiles(names = ADMIN_FILES) {
+  return names.map(name => {
+    try {
+      const content = fs.readFileSync(path.join(__dirname, name), 'utf8');
+      return `=== ${name} (${content.length} chars) ===\n${content.slice(0, 5000)}\n`;
+    } catch {
+      return `=== ${name} === [tidak ditemukan]\n`;
+    }
+  }).join('\n---\n');
+}
+
+async function analyzeCode(question, files = ADMIN_FILES) {
+  if (!groqAdmin) throw new Error('GROQ Admin tidak tersedia (set GROQ_ADMIN_API_KEY atau GROQ_API_KEY)');
+
+  const codeContent = readProjectFiles(files);
+  const systemPrompt = `Kamu adalah senior code auditor dan second AI assistant yang menganalisa source code bot Telegram Node.js ini secara mendalam.
+
+Tugasmu:
+- Identifikasi bug nyata atau potensial
+- Temukan security issues dan kerentanan
+- Sarankan optimasi performa
+- Review arsitektur dan design patterns
+- Jawab pertanyaan teknis tentang kode dengan presisi
+- Berikan rekomendasi yang actionable dan spesifik
+
+FORMAT OUTPUT — WAJIB IKUTI PERSIS:
+Hanya gunakan 4 tag HTML ini (tidak ada yang lain):
+  <b>teks</b>        → section header
+  <i>teks</i>        → catatan / caveat
+  <code>teks</code>  → nama fungsi / variabel / nilai inline
+  <pre><code>
+teks
+  </code></pre>      → contoh kode
+
+DILARANG KERAS: <ul>, <ol>, <li>, <br>, <h1>-<h6>, markdown **, ##
+Untuk daftar: gunakan "- item" manual.`;
+
+  const completion = await groqAdmin.chat.completions.create({
+    model: ADMIN_MODEL,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: `Source code proyek:\n\n${codeContent}\n\n---\nPertanyaan/tugas: ${question}` },
+    ],
+    temperature: 0.2,
+    max_tokens: 8192,
+  });
+
+  return completion.choices[0]?.message?.content || 'Tidak ada response dari AI.';
+}
+
 // ─── Commands ─────────────────────────────────────────────────────────────────
 bot.start(authMiddleware, async (ctx) => {
   const session = getSession(ctx.chat.id);
@@ -557,6 +640,17 @@ bot.command('new', authMiddleware, async (ctx) => {
 bot.command('info', authMiddleware, async (ctx) => {
   const session = getSession(ctx.chat.id);
   await ctx.replyWithHTML(buildInfoText(session), buildMainMenu(session));
+});
+
+bot.command('admin', async (ctx) => {
+  if (!isAdmin(ctx.from.id)) return ctx.reply('⛔ Akses ditolak.');
+  const session       = getSession(ctx.chat.id);
+  session.adminMode   = true;
+  saveSessions();
+  await ctx.replyWithHTML(
+    `<b>🔐 Admin Panel</b>\n\nMode admin aktif. Ketik pertanyaan langsung untuk analisis kode, atau pilih aksi di bawah.\n\n<i>AI: ${ADMIN_MODEL}</i>`,
+    adminMenu
+  );
 });
 
 // ─── Callbacks ────────────────────────────────────────────────────────────────
@@ -648,11 +742,161 @@ for (const [action, modelKey, label] of MODEL_ACTIONS) {
   });
 }
 
+// ─── Admin Callbacks ───────────────────────────────────────────────────────────
+function adminGuard(ctx) {
+  if (!isAdmin(ctx.from.id)) {
+    ctx.answerCbQuery('⛔ Akses ditolak.').catch(() => {});
+    return false;
+  }
+  return true;
+}
+
+bot.action('admin_panel', async (ctx) => {
+  if (!adminGuard(ctx)) return;
+  const session     = getSession(ctx.chat.id);
+  session.adminMode = true;
+  saveSessions();
+  await ctx.answerCbQuery();
+  await ctx.replyWithHTML(
+    `<b>🔐 Admin Panel</b>\n\nKetik pertanyaan atau pilih aksi:\n\n<i>AI: ${ADMIN_MODEL}</i>`,
+    adminMenu
+  );
+});
+
+bot.action('admin_exit', async (ctx) => {
+  if (!adminGuard(ctx)) return;
+  const session     = getSession(ctx.chat.id);
+  session.adminMode = false;
+  saveSessions();
+  await ctx.answerCbQuery('✅ Keluar dari admin mode');
+  await ctx.reply('Mode admin dinonaktifkan.', buildMainMenu(session));
+});
+
+bot.action('admin_status', async (ctx) => {
+  if (!adminGuard(ctx)) return;
+  await ctx.answerCbQuery();
+  const uptime = process.uptime();
+  const h = Math.floor(uptime / 3600);
+  const m = Math.floor((uptime % 3600) / 60);
+  const s = Math.floor(uptime % 60);
+  const totalSessions  = sessions.size;
+  const activeSessions = [...sessions.values()].filter(v => v.history?.length > 0).length;
+  const memMB = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
+  const txt = [
+    '<b>📊 System Status</b>', '',
+    `<b>Uptime:</b> <code>${h}j ${m}m ${s}d</code>`,
+    `<b>Memory:</b> <code>${memMB} MB heap</code>`,
+    `<b>Sessions total:</b> <code>${totalSessions}</code>`,
+    `<b>Sessions aktif:</b> <code>${activeSessions}</code>`, '',
+    '<b>Models:</b>',
+    `- Gemini primary: <code>${MODELS.flash25}</code>`,
+    `- Groq fallback: <code>${GROQ_MODELS.versatile}</code>`,
+    `- Admin AI: <code>${ADMIN_MODEL}</code>`, '',
+    `<b>Admin Groq:</b> <code>${groqAdmin ? 'aktif' : 'tidak tersedia'}</code>`,
+    `<b>Admin users:</b> <code>${ADMIN_USERS.length}</code>`,
+  ].join('\n');
+  await ctx.replyWithHTML(txt, adminMiniMenu);
+});
+
+bot.action('admin_reset_all', async (ctx) => {
+  if (!adminGuard(ctx)) return;
+  await ctx.answerCbQuery();
+  const count = [...sessions.values()].filter(v => v.history?.length > 0).length;
+  for (const [, s] of sessions) s.history = [];
+  saveSessions();
+  await ctx.replyWithHTML(
+    `<b>🧹 Reset Selesai</b>\n\n<code>${count}</code> session aktif dihapus.`,
+    adminMiniMenu
+  );
+});
+
+bot.action('admin_test', async (ctx) => {
+  if (!adminGuard(ctx)) return;
+  await ctx.answerCbQuery('🧪 Testing sanitizer...');
+  const sample = [
+    '**Bold markdown** dan __underline__',
+    '<h2>Heading dua</h2>',
+    '<ul><li>Item satu</li><li>Item dua</li></ul>',
+    'if (a < b && c > d) { return true; }',
+    '```js\nconst x = a < b ? \'less\' : \'more\';\n```',
+    'Ini <b>bold valid</b> dan <code>kode inline</code>.',
+  ].join('\n');
+  const result = sanitizeForTelegram(sample);
+  await ctx.replyWithHTML(
+    '<b>🧪 Test Sanitizer</b>\n\n<b>Input:</b>\n<pre><code>' + escapeHtml(sample) + '</code></pre>\n\n<b>Output:</b>\n' + result,
+    adminMiniMenu
+  );
+});
+
+bot.action('admin_diagnose', async (ctx) => {
+  if (!adminGuard(ctx)) return;
+  await ctx.answerCbQuery('🔍 Menganalisa kode...');
+  await ctx.reply('🔍 Mendiagnosa kode... (~15-30 detik)');
+  const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
+  try {
+    const result = await analyzeCode(
+      'Diagnosa kode ini secara mendalam. Temukan bug nyata atau potensial, issue kritis, dan hal yang perlu segera diperbaiki. Urutkan dari prioritas tertinggi ke terendah.'
+    );
+    clearInterval(typingInterval);
+    console.log('[👑 Admin] Diagnosa selesai');
+    await sendLong(ctx, result, adminMiniMenu);
+  } catch (err) {
+    clearInterval(typingInterval);
+    console.error('❌ [Admin Diagnose]:', err.message);
+    await ctx.replyWithHTML(`❌ Error: <code>${escapeHtml(err.message?.slice(0, 120))}</code>`, adminMiniMenu);
+  }
+});
+
+bot.action('admin_audit', async (ctx) => {
+  if (!adminGuard(ctx)) return;
+  await ctx.answerCbQuery('📋 Memulai full audit...');
+  await ctx.reply('📋 Melakukan full audit... (~30-60 detik)');
+  const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
+  try {
+    const result = await analyzeCode(
+      'Lakukan full audit komprehensif: arsitektur, keamanan, performa, maintainability, dan design patterns. Berikan skor 1-10 untuk setiap aspek dan rekomendasi spesifik.'
+    );
+    clearInterval(typingInterval);
+    console.log('[👑 Admin] Full audit selesai');
+    await sendLong(ctx, result, adminMiniMenu);
+  } catch (err) {
+    clearInterval(typingInterval);
+    console.error('❌ [Admin Audit]:', err.message);
+    await ctx.replyWithHTML(`❌ Error: <code>${escapeHtml(err.message?.slice(0, 120))}</code>`, adminMiniMenu);
+  }
+});
+
 // ─── Handler: Text ────────────────────────────────────────────────────────────
 bot.on('text', authMiddleware, async (ctx) => {
   const chatId   = ctx.chat.id;
   const userText = ctx.message.text.trim();
+  const session  = getSession(chatId);
 
+  // ── Admin mode: route to code analyzer ────────────────────────────────────
+  if (session.adminMode && isAdmin(ctx.from.id)) {
+    console.log(`\n[👑 ADMIN] ${ctx.from.first_name} (${chatId}): ${userText.slice(0, 80)}`);
+    await ctx.sendChatAction('typing');
+    const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
+    try {
+      const result = await analyzeCode(userText);
+      clearInterval(typingInterval);
+      console.log(`[📤] [admin:${ADMIN_MODEL}] ${result.slice(0, 60).replace(/\n/g, ' ')}...`);
+      await sendLong(ctx, result, {
+        reply_parameters: { message_id: ctx.message.message_id },
+        ...adminMiniMenu,
+      });
+    } catch (err) {
+      clearInterval(typingInterval);
+      console.error('❌ [Admin Chat]:', err.message);
+      await ctx.replyWithHTML(
+        `❌ Error: <code>${escapeHtml(err.message?.slice(0, 120))}</code>`,
+        adminMiniMenu
+      );
+    }
+    return;
+  }
+
+  // ── Normal chat flow ───────────────────────────────────────────────────────
   console.log(`\n[📥] ${ctx.from.first_name} (${chatId}): ${userText.slice(0, 80)}`);
   await ctx.sendChatAction('typing');
 
