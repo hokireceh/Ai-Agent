@@ -1,12 +1,14 @@
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const Groq = require('groq-sdk');
 const fs   = require('fs');
 const path = require('path');
 
 // ─── Validation ───────────────────────────────────────────────────────────────
-const BOT_TOKEN    = process.env.TELEGRAM_BOT_TOKEN;
-const GEMINI_KEY   = process.env.GEMINI_API_KEY;
+const BOT_TOKEN     = process.env.TELEGRAM_BOT_TOKEN;
+const GEMINI_KEY    = process.env.GEMINI_API_KEY;
+const GROQ_KEY      = process.env.GROQ_API_KEY;
 const ALLOWED_USERS = process.env.ALLOWED_USER_IDS
   ? process.env.ALLOWED_USER_IDS.split(',').map(Number)
   : [];
@@ -16,21 +18,45 @@ if (!BOT_TOKEN || !GEMINI_KEY) {
   process.exit(1);
 }
 
-// ─── Models (source: ai.google.dev/gemini-api/docs/models — verified May 2026) ──
+// ─── Model Registry ───────────────────────────────────────────────────────────
+// Source: ai.google.dev/gemini-api/docs/models — verified May 2026
 const MODELS = {
-  lite:  'gemini-2.0-flash-lite',
-  flash: 'gemini-2.0-flash',
-  pro:   'gemini-2.5-pro-preview-05-06',
+  lite:    'gemini-2.0-flash-lite',
+  flash:   'gemini-2.0-flash',
+  flash25: 'gemini-2.5-flash',
+  pro:     'gemini-2.5-pro-preview-05-06',
+};
+
+// Source: api.groq.com/openai/v1/models — verified May 2026 (live API check)
+const GROQ_MODELS = {
+  instant:   'llama-3.1-8b-instant',
+  versatile: 'llama-3.3-70b-versatile',
+  qwen:      'qwen/qwen3-32b',
 };
 
 const MODEL_LABELS = {
-  auto:           '🔄 Auto',
-  [MODELS.lite]:  '⚡ Flash Lite',
-  [MODELS.flash]: '🔥 Flash',
-  [MODELS.pro]:   '🧠 Pro',
+  auto:                 '🔄 Auto',
+  [MODELS.lite]:        '⚡ Flash Lite',
+  [MODELS.flash]:       '🔥 Flash 2.0',
+  [MODELS.flash25]:     '✨ Flash 2.5',
+  [MODELS.pro]:         '🧠 Pro 2.5',
+  [GROQ_MODELS.instant]:   '⚡ Llama 8B',
+  [GROQ_MODELS.versatile]: '🦙 Llama 70B',
+  [GROQ_MODELS.qwen]:      '🐉 Qwen3 32B',
 };
 
-// ─── System Prompts per Mode (docs/prompt-audit.md) ──────────────────────────
+const MODEL_SHORT = {
+  auto:                 'Auto',
+  [MODELS.lite]:        'Lite',
+  [MODELS.flash]:       'Flash 2.0',
+  [MODELS.flash25]:     'Flash 2.5',
+  [MODELS.pro]:         'Pro 2.5',
+  [GROQ_MODELS.instant]:   'Llama 8B',
+  [GROQ_MODELS.versatile]: 'Llama 70B',
+  [GROQ_MODELS.qwen]:      'Qwen3 32B',
+};
+
+// ─── System Prompts per Mode (rules: docs/prompt-audit.md) ───────────────────
 const SYSTEM_PROMPTS = {
   general: `Kamu adalah asisten AI yang cerdas, adaptif, dan to the point.
 
@@ -103,7 +129,7 @@ function loadSessions() {
     if (fs.existsSync(SESSION_FILE)) {
       return new Map(Object.entries(JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'))));
     }
-  } catch { /* corrupt file — start fresh */ }
+  } catch { /* corrupt — start fresh */ }
   return new Map();
 }
 
@@ -125,9 +151,10 @@ function getSession(chatId) {
   return sessions.get(key);
 }
 
-// ─── Init ─────────────────────────────────────────────────────────────────────
+// ─── Init Clients ─────────────────────────────────────────────────────────────
 const bot   = new Telegraf(BOT_TOKEN);
 const genAI = new GoogleGenerativeAI(GEMINI_KEY);
+const groq  = GROQ_KEY ? new Groq({ apiKey: GROQ_KEY }) : null;
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 function isAllowed(userId) {
@@ -143,56 +170,56 @@ function authMiddleware(ctx, next) {
   return next();
 }
 
-// ─── Complexity Detector (auto-cascade heuristic) ────────────────────────────
-function detectPreferredModel(text) {
-  const words = text.split(/\s+/).length;
-  const hasCode    = /```|function |class |import |const |def |async |await |SELECT |CREATE /.test(text);
-  const isDeep     = /\banalisis\b|\bjelaskan detail\b|\bbandingkan\b|\bevaluasi\b|\brancang\b|\barsitektur\b|\boptimasi\b|\bstrategi\b/i.test(text);
-  if (hasCode || isDeep || words > 80) return MODELS.pro;
-  return MODELS.flash;
+// ─── Complexity Detector ──────────────────────────────────────────────────────
+function isComplex(text) {
+  const words   = text.split(/\s+/).length;
+  const hasCode = /```|function |class |import |const |def |async |await |SELECT |CREATE /.test(text);
+  const isDeep  = /\banalisis\b|\bjelaskan detail\b|\bbandingkan\b|\bevaluasi\b|\brancang\b|\barsitektur\b|\boptimasi\b|\bstrategi\b/i.test(text);
+  return hasCode || isDeep || words > 80;
 }
 
-// ─── Gemini Engine (auto-cascade with fallback) ───────────────────────────────
-async function askGemini(chatId, userMessage, imageParts = []) {
+// ─── History Converter: Gemini → Groq (OpenAI format) ────────────────────────
+function historyToGroq(history, systemPrompt) {
+  const messages = [{ role: 'system', content: systemPrompt }];
+  for (const msg of history.slice(-20)) {
+    const textParts = msg.parts.filter(p => p.text);
+    const hasMedia  = msg.parts.some(p => p.inlineData);
+    const content   = textParts.map(p => p.text).join('')
+                    + (hasMedia ? '\n[Pengguna mengirim gambar/file]' : '');
+    messages.push({
+      role:    msg.role === 'model' ? 'assistant' : 'user',
+      content: content || '[...]',
+    });
+  }
+  return messages;
+}
+
+// ─── Gemini Ask (internal) ────────────────────────────────────────────────────
+async function askWithGemini(chatId, userMessage, imageParts = [], modelCascade = []) {
   const session      = getSession(chatId);
   const systemPrompt = SYSTEM_PROMPTS[session.mode] || SYSTEM_PROMPTS.general;
-
-  // Build cascade order
-  let cascade;
-  if (session.model === 'auto') {
-    const preferred = detectPreferredModel(userMessage);
-    cascade = preferred === MODELS.pro
-      ? [MODELS.pro, MODELS.flash, MODELS.lite]
-      : [MODELS.flash, MODELS.lite];
-  } else {
-    // User-chosen model with fallback safety net
-    cascade = [session.model, MODELS.flash, MODELS.lite].filter((v, i, a) => a.indexOf(v) === i);
-  }
-
-  const messageParts = imageParts.length > 0
+  const msgParts     = imageParts.length > 0
     ? [...imageParts, { text: userMessage || 'Analisis konten ini.' }]
     : userMessage;
 
   let lastErr;
-  for (const modelId of cascade) {
+  for (const modelId of modelCascade) {
     try {
-      const model = genAI.getGenerativeModel({ model: modelId, systemInstruction: systemPrompt });
-      const chat  = model.startChat({ history: session.history.slice(-20) });
-      const result = await chat.sendMessage(messageParts);
+      const model  = genAI.getGenerativeModel({ model: modelId, systemInstruction: systemPrompt });
+      const chat   = model.startChat({ history: session.history.slice(-20) });
+      const result = await chat.sendMessage(msgParts);
       const text   = result.response.text();
 
-      // Persist history only on success
+      // Persist to session history (Gemini format)
       const userPart = imageParts.length > 0
         ? { role: 'user', parts: [...imageParts, { text: userMessage || 'Analisis konten ini.' }] }
         : { role: 'user', parts: [{ text: userMessage }] };
       session.history.push(userPart);
       session.history.push({ role: 'model', parts: [{ text }] });
-
-      // Cap history at 40 entries (20 exchanges)
       if (session.history.length > 40) session.history = session.history.slice(-40);
       saveSessions();
 
-      return { text, usedModel: modelId };
+      return { text, usedModel: modelId, provider: 'gemini' };
 
     } catch (err) {
       lastErr = err;
@@ -201,15 +228,134 @@ async function askGemini(chatId, userMessage, imageParts = []) {
         || err.message?.includes('not found')
         || err.message?.includes('overloaded');
 
-      const nextIdx = cascade.indexOf(modelId) + 1;
-      if (isFallbackable && nextIdx < cascade.length) {
-        console.warn(`⚠️ [Cascade] ${modelId} → fallback ke ${cascade[nextIdx]} (${err.status ?? err.message?.slice(0, 40)})`);
+      const nextIdx = modelCascade.indexOf(modelId) + 1;
+      if (isFallbackable && nextIdx < modelCascade.length) {
+        console.warn(`[Omni-Router] Gemini ${modelId} failed (${err.status ?? err.message?.slice(0,40)}), trying ${modelCascade[nextIdx]}...`);
         continue;
       }
       throw err;
     }
   }
   throw lastErr;
+}
+
+// ─── Groq Ask (internal) ──────────────────────────────────────────────────────
+async function askWithGroq(chatId, userMessage, modelId) {
+  const session      = getSession(chatId);
+  const systemPrompt = SYSTEM_PROMPTS[session.mode] || SYSTEM_PROMPTS.general;
+
+  const messages = historyToGroq(session.history, systemPrompt);
+  messages.push({ role: 'user', content: userMessage });
+
+  const completion = await groq.chat.completions.create({
+    model:       modelId,
+    messages,
+    temperature: 0.7,
+    max_tokens:  4096,
+  });
+
+  const text = completion.choices[0]?.message?.content || '';
+
+  // Persist to session history (Gemini format — single source of truth)
+  session.history.push({ role: 'user',  parts: [{ text: userMessage }] });
+  session.history.push({ role: 'model', parts: [{ text }] });
+  if (session.history.length > 40) session.history = session.history.slice(-40);
+  saveSessions();
+
+  return { text, usedModel: modelId, provider: 'groq' };
+}
+
+// ─── Groq Tier 4 Fallback Chain ───────────────────────────────────────────────
+async function groqFallback(chatId, userMessage) {
+  try {
+    console.log(`[Omni-Router] Tier 4: Groq Versatile (${GROQ_MODELS.versatile})`);
+    return await askWithGroq(chatId, userMessage, GROQ_MODELS.versatile);
+  } catch (err) {
+    console.warn('[Omni-Router] Tier 4 Versatile failed, trying Qwen...');
+    return await askWithGroq(chatId, userMessage, GROQ_MODELS.qwen);
+  }
+}
+
+// ─── Omni-Router: smartRequest ────────────────────────────────────────────────
+async function smartRequest(chatId, userMessage, imageParts = []) {
+  const session  = getSession(chatId);
+  const groqOK   = !!groq;
+  const msgLen   = userMessage.length;
+  const coding   = session.mode === 'coding';
+  const complex  = isComplex(userMessage);
+
+  // ── Multimodal (image/PDF) → always Gemini (Groq free tier: text only) ──
+  if (imageParts.length > 0) {
+    console.log('[Omni-Router] Multimodal detected -> Gemini only');
+    return askWithGemini(chatId, userMessage, imageParts,
+      [MODELS.flash25, MODELS.flash, MODELS.lite]);
+  }
+
+  // ── User-chosen model (not auto) ──────────────────────────────────────────
+  if (session.model !== 'auto') {
+    const isGroqModel = Object.values(GROQ_MODELS).includes(session.model);
+
+    if (isGroqModel && groqOK) {
+      console.log(`[Omni-Router] User model (Groq) -> ${session.model}`);
+      return askWithGroq(chatId, userMessage, session.model);
+    }
+
+    const geminiCascade = [session.model, MODELS.flash25, MODELS.flash, MODELS.lite]
+      .filter((v, i, a) => a.indexOf(v) === i);
+    try {
+      return await askWithGemini(chatId, userMessage, [], geminiCascade);
+    } catch (err) {
+      const isQuota = err.status === 429 || err.message?.includes('quota');
+      if (isQuota && groqOK) {
+        console.log('[Omni-Router] User model quota hit -> Tier 4 Groq fallback');
+        return groqFallback(chatId, userMessage);
+      }
+      throw err;
+    }
+  }
+
+  // ── Auto routing ──────────────────────────────────────────────────────────
+
+  // Tier 1 — Short/instant → Groq Llama 8B
+  if (groqOK && msgLen < 40) {
+    console.log(`[Omni-Router] Short query (${msgLen} chars) -> Tier 1: Llama 8B (Groq)`);
+    try {
+      return await askWithGroq(chatId, userMessage, GROQ_MODELS.instant);
+    } catch (err) {
+      console.warn('[Omni-Router] Tier 1 failed, cascading to Tier 2...');
+      // fall through
+    }
+  }
+
+  // Tier 3 — Coding mode or complex query → Gemini Pro
+  if (coding || complex) {
+    console.log(`[Omni-Router] ${coding ? 'Coding mode' : 'Complex query'} -> Tier 3: Gemini Pro`);
+    try {
+      return await askWithGemini(chatId, userMessage, [],
+        [MODELS.pro, MODELS.flash25, MODELS.flash]);
+    } catch (err) {
+      const isQuota = err.status === 429 || err.message?.includes('quota');
+      if (isQuota && groqOK) {
+        console.log('[Omni-Router] Gemini Pro quota -> Tier 4: Groq Versatile');
+        return groqFallback(chatId, userMessage);
+      }
+      throw err;
+    }
+  }
+
+  // Tier 2 — General → Gemini Flash 2.5
+  console.log('[Omni-Router] General query -> Tier 2: Gemini Flash 2.5');
+  try {
+    return await askWithGemini(chatId, userMessage, [],
+      [MODELS.flash25, MODELS.flash, MODELS.lite]);
+  } catch (err) {
+    const isQuota = err.status === 429 || err.message?.includes('quota');
+    if (isQuota && groqOK) {
+      console.log('[Omni-Router] Gemini Flash quota -> Tier 4: Groq Versatile');
+      return groqFallback(chatId, userMessage);
+    }
+    throw err;
+  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -230,9 +376,9 @@ async function sendLong(ctx, text, extra = {}) {
     catch { return await ctx.reply(text, extra); }
   }
 
-  const lines   = text.split('\n');
-  const chunks  = [];
-  let   current = '';
+  const lines  = text.split('\n');
+  const chunks = [];
+  let current  = '';
 
   for (const line of lines) {
     if ((current + line).length > MAX) {
@@ -252,13 +398,6 @@ async function sendLong(ctx, text, extra = {}) {
 }
 
 // ─── Menus ────────────────────────────────────────────────────────────────────
-const MODEL_SHORT = {
-  auto:           'Auto',
-  [MODELS.lite]:  'Lite',
-  [MODELS.flash]: 'Flash',
-  [MODELS.pro]:   'Pro',
-};
-
 const MODE_EMOJI = { general: '💡', coding: '🧠', analyst: '📊', creative: '🎨' };
 
 function buildMainMenu(session) {
@@ -278,9 +417,11 @@ const modeMenu = Markup.inlineKeyboard([
 ]);
 
 const modelMenu = Markup.inlineKeyboard([
-  [Markup.button.callback('🔄 Auto (Cascade — Recommended)', 'model_auto')],
-  [Markup.button.callback('🔥 Flash (Default)', 'model_flash'), Markup.button.callback('⚡ Flash Lite (Cepat)', 'model_lite')],
-  [Markup.button.callback('🧠 Pro (Pintar)', 'model_pro')],
+  [Markup.button.callback('🔄 Auto Cascade (Recommended)', 'model_auto')],
+  [Markup.button.callback('✨ Gemini Flash 2.5', 'model_flash25'), Markup.button.callback('🧠 Gemini Pro 2.5', 'model_pro')],
+  [Markup.button.callback('🔥 Gemini Flash 2.0', 'model_flash'), Markup.button.callback('⚡ Gemini Lite', 'model_lite')],
+  [Markup.button.callback('⚡ Llama 8B (Groq)', 'model_groq_instant'), Markup.button.callback('🦙 Llama 70B (Groq)', 'model_groq_versatile')],
+  [Markup.button.callback('🐉 Qwen3 32B (Groq)', 'model_groq_qwen')],
   [Markup.button.callback('« Kembali', 'show_menu')],
 ]);
 
@@ -311,21 +452,30 @@ bot.command('new', authMiddleware, async (ctx) => {
 
 bot.command('info', authMiddleware, async (ctx) => {
   const session = getSession(ctx.chat.id);
-  await ctx.replyWithHTML([
+  await ctx.replyWithHTML(buildInfoText(session), buildMainMenu(session));
+});
+
+// ─── Callbacks ────────────────────────────────────────────────────────────────
+function buildInfoText(session) {
+  return [
     '<b>ℹ️ Info Bot</b>',
     '',
     `Mode: <code>${session.mode}</code>`,
     `Model: <code>${MODEL_LABELS[session.model] ?? session.model}</code>`,
     `History: <code>${Math.floor(session.history.length / 2)} exchange</code>`,
     '',
-    '<b>Model tersedia:</b>',
-    `⚡ <code>${MODELS.lite}</code>`,
-    `🔥 <code>${MODELS.flash}</code>`,
+    '<b>Gemini Models:</b>',
+    `✨ <code>${MODELS.flash25}</code>`,
     `🧠 <code>${MODELS.pro}</code>`,
-  ].join('\n'), buildMainMenu(session));
-});
+    `🔥 <code>${MODELS.flash}</code>`,
+    '',
+    `<b>Groq Models:</b> ${groq ? 'aktif' : '⚠️ tidak aktif (no GROQ_API_KEY)'}`,
+    groq ? `⚡ <code>${GROQ_MODELS.instant}</code>` : '',
+    groq ? `🦙 <code>${GROQ_MODELS.versatile}</code>` : '',
+    groq ? `🐉 <code>${GROQ_MODELS.qwen}</code>` : '',
+  ].filter(l => l !== '').join('\n');
+}
 
-// ─── Callbacks ────────────────────────────────────────────────────────────────
 bot.action('show_menu', authMiddleware, async (ctx) => {
   await ctx.answerCbQuery();
   await ctx.reply('Menu:', buildMainMenu(getSession(ctx.chat.id)));
@@ -347,31 +497,13 @@ bot.action('clear_history', authMiddleware, async (ctx) => {
   await ctx.reply('History percakapan dihapus.');
 });
 
-bot.action('mode_menu', authMiddleware, async (ctx) => {
-  await ctx.answerCbQuery();
-  await ctx.reply('Pilih mode:', modeMenu);
-});
-
-bot.action('model_menu', authMiddleware, async (ctx) => {
-  await ctx.answerCbQuery();
-  await ctx.reply('Pilih model:', modelMenu);
-});
+bot.action('mode_menu',  authMiddleware, async (ctx) => { await ctx.answerCbQuery(); await ctx.reply('Pilih mode:', modeMenu); });
+bot.action('model_menu', authMiddleware, async (ctx) => { await ctx.answerCbQuery(); await ctx.reply('Pilih model:', modelMenu); });
 
 bot.action('info', authMiddleware, async (ctx) => {
   const session = getSession(ctx.chat.id);
   await ctx.answerCbQuery();
-  await ctx.replyWithHTML([
-    '<b>ℹ️ Info Bot</b>',
-    '',
-    `Mode: <code>${session.mode}</code>`,
-    `Model: <code>${MODEL_LABELS[session.model] ?? session.model}</code>`,
-    `History: <code>${Math.floor(session.history.length / 2)} exchange</code>`,
-    '',
-    '<b>Model tersedia:</b>',
-    `⚡ <code>${MODELS.lite}</code>`,
-    `🔥 <code>${MODELS.flash}</code>`,
-    `🧠 <code>${MODELS.pro}</code>`,
-  ].join('\n'), buildMainMenu(session));
+  await ctx.replyWithHTML(buildInfoText(session), buildMainMenu(session));
 });
 
 // Mode actions
@@ -393,10 +525,14 @@ for (const [action, mode, label] of MODE_ACTIONS) {
 
 // Model actions
 const MODEL_ACTIONS = [
-  ['model_auto',  'auto',        '🔄 Auto Cascade aktif'],
-  ['model_flash', MODELS.flash,  '🔥 Flash aktif'],
-  ['model_lite',  MODELS.lite,   '⚡ Flash Lite aktif'],
-  ['model_pro',   MODELS.pro,    '🧠 Pro aktif'],
+  ['model_auto',          'auto',                  '🔄 Auto Cascade aktif'],
+  ['model_flash25',       MODELS.flash25,          '✨ Gemini Flash 2.5 aktif'],
+  ['model_pro',           MODELS.pro,              '🧠 Gemini Pro 2.5 aktif'],
+  ['model_flash',         MODELS.flash,            '🔥 Gemini Flash 2.0 aktif'],
+  ['model_lite',          MODELS.lite,             '⚡ Gemini Lite aktif'],
+  ['model_groq_instant',  GROQ_MODELS.instant,     '⚡ Llama 8B (Groq) aktif'],
+  ['model_groq_versatile',GROQ_MODELS.versatile,   '🦙 Llama 70B (Groq) aktif'],
+  ['model_groq_qwen',     GROQ_MODELS.qwen,        '🐉 Qwen3 32B (Groq) aktif'],
 ];
 for (const [action, modelKey, label] of MODEL_ACTIONS) {
   bot.action(action, authMiddleware, async (ctx) => {
@@ -419,9 +555,9 @@ bot.on('text', authMiddleware, async (ctx) => {
   const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
 
   try {
-    const { text, usedModel } = await askGemini(chatId, userText);
+    const { text, usedModel, provider } = await smartRequest(chatId, userText);
     clearInterval(typingInterval);
-    console.log(`[📤] [${usedModel}] ${text.slice(0, 60).replace(/\n/g, ' ')}...`);
+    console.log(`[📤] [${provider}:${usedModel}] ${text.slice(0, 60).replace(/\n/g, ' ')}...`);
 
     await sendLong(ctx, text, {
       reply_parameters: { message_id: ctx.message.message_id },
@@ -430,12 +566,10 @@ bot.on('text', authMiddleware, async (ctx) => {
   } catch (err) {
     clearInterval(typingInterval);
     console.error('❌ [Error Text]:', err.message);
-
     const isQuota = err.message?.includes('quota') || err.status === 429;
     const errMsg  = isQuota
-      ? '⚠️ Rate limit tercapai. Tunggu sebentar dan coba lagi.'
+      ? '⚠️ Rate limit semua provider tercapai. Tunggu sebentar dan coba lagi.'
       : `❌ Error: <code>${escapeHtml(err.message?.slice(0, 120) ?? 'Unknown')}</code>`;
-
     await ctx.replyWithHTML(errMsg).catch(() => ctx.reply(errMsg));
   }
 });
@@ -444,7 +578,7 @@ bot.on('text', authMiddleware, async (ctx) => {
 bot.on('photo', authMiddleware, async (ctx) => {
   const chatId  = ctx.chat.id;
   const caption = ctx.message.caption?.trim() || '';
-  const photo   = ctx.message.photo[ctx.message.photo.length - 1]; // highest res
+  const photo   = ctx.message.photo[ctx.message.photo.length - 1];
 
   console.log(`\n[📸] ${ctx.from.first_name} kirim foto. Caption: "${caption}"`);
   await ctx.sendChatAction('typing');
@@ -452,13 +586,13 @@ bot.on('photo', authMiddleware, async (ctx) => {
   const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
 
   try {
-    const fileLink  = await ctx.telegram.getFileLink(photo.file_id);
-    const base64    = await downloadAsBase64(fileLink.href);
-    const imgParts  = [{ inlineData: { mimeType: 'image/jpeg', data: base64 } }];
+    const fileLink = await ctx.telegram.getFileLink(photo.file_id);
+    const base64   = await downloadAsBase64(fileLink.href);
+    const imgParts = [{ inlineData: { mimeType: 'image/jpeg', data: base64 } }];
 
-    const { text, usedModel } = await askGemini(chatId, caption, imgParts);
+    const { text, usedModel } = await smartRequest(chatId, caption, imgParts);
     clearInterval(typingInterval);
-    console.log(`[📤] [${usedModel}] Vision: ${text.slice(0, 60).replace(/\n/g, ' ')}...`);
+    console.log(`[📤] [gemini:${usedModel}] Vision: ${text.slice(0, 60).replace(/\n/g, ' ')}...`);
 
     await sendLong(ctx, text, {
       reply_parameters: { message_id: ctx.message.message_id },
@@ -480,10 +614,8 @@ bot.on('document', authMiddleware, async (ctx) => {
   const mimeType = doc.mime_type || 'application/octet-stream';
   const fileSize = doc.file_size || 0;
 
-  const MAX_BYTES = 5 * 1024 * 1024; // 5 MB
-  if (fileSize > MAX_BYTES) {
-    return ctx.reply('⚠️ File terlalu besar. Maksimal 5 MB.');
-  }
+  const MAX_BYTES = 5 * 1024 * 1024;
+  if (fileSize > MAX_BYTES) return ctx.reply('⚠️ File terlalu besar. Maksimal 5 MB.');
 
   const isText = mimeType.startsWith('text/') || mimeType === 'application/json';
   const isPdf  = mimeType === 'application/pdf';
@@ -506,16 +638,23 @@ bot.on('document', authMiddleware, async (ctx) => {
 
     let result;
     if (isPdf) {
+      // PDF → Gemini vision (Groq doesn't support binary file input)
       const fileParts = [{ inlineData: { mimeType: 'application/pdf', data: base64 } }];
-      result = await askGemini(chatId, caption || `Analisis dokumen PDF ini: ${doc.file_name}`, fileParts);
+      console.log('[Omni-Router] PDF detected -> Gemini only');
+      result = await askWithGemini(chatId,
+        caption || `Analisis dokumen PDF ini: ${doc.file_name}`,
+        fileParts,
+        [MODELS.flash25, MODELS.flash, MODELS.lite]
+      );
     } else {
+      // Text file → decode and pass as prompt (routed via smartRequest)
       const textContent = Buffer.from(base64, 'base64').toString('utf8');
       const prompt      = `File: ${doc.file_name}\n\n${textContent.slice(0, 8000)}\n\n${caption || 'Analisis file ini.'}`;
-      result = await askGemini(chatId, prompt);
+      result = await smartRequest(chatId, prompt);
     }
 
     clearInterval(typingInterval);
-    console.log(`[📤] [${result.usedModel}] Doc: ${result.text.slice(0, 60).replace(/\n/g, ' ')}...`);
+    console.log(`[📤] [${result.provider}:${result.usedModel}] Doc: ${result.text.slice(0, 60).replace(/\n/g, ' ')}...`);
 
     await sendLong(ctx, result.text, {
       reply_parameters: { message_id: ctx.message.message_id },
@@ -533,7 +672,8 @@ bot.on('document', authMiddleware, async (ctx) => {
 bot.launch({ dropPendingUpdates: true });
 
 console.log('🤖 Bot aktif — Mode: Polling | Session: Persistent File');
-console.log(`📦 Models: Lite=${MODELS.lite} | Flash=${MODELS.flash} | Pro=${MODELS.pro}`);
+console.log(`📦 Gemini: ${MODELS.flash25} | ${MODELS.pro} | ${MODELS.flash} | ${MODELS.lite}`);
+console.log(`📦 Groq  : ${groq ? `${GROQ_MODELS.instant} | ${GROQ_MODELS.versatile} | ${GROQ_MODELS.qwen}` : 'DISABLED (no GROQ_API_KEY)'}`);
 
 process.once('SIGINT',  () => { saveSessions(); bot.stop('SIGINT'); });
 process.once('SIGTERM', () => { saveSessions(); bot.stop('SIGTERM'); });
