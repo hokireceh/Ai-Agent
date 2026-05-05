@@ -36,12 +36,4 @@ Untuk daftar/list: gunakan karakter strip manual:
 
 Paragraf pendek, max 3-4 baris per blok.`;
 
-// Tetap export SYSTEM_PROMPTS untuk kompatibilitas backward (admin.js, dll)
-const SYSTEM_PROMPTS = {
-  general:  ADAPTIVE_PROMPT,
-  coding:   ADAPTIVE_PROMPT,
-  analyst:  ADAPTIVE_PROMPT,
-  creative: ADAPTIVE_PROMPT,
-};
-
-module.exports = { SYSTEM_PROMPTS, ADAPTIVE_PROMPT };
+module.exports = { ADAPTIVE_PROMPT };
