@@ -17,13 +17,14 @@ function initScheduler(bot) {
     if (!_bot || ADMIN_USERS.length === 0) return;
 
     try {
-      const digest = await buildDailyDigest();
+      const { summary, detailSaved } = await buildDailyDigest();
       const header = '<b>🌅 Daily Health Report</b>\n<i>Laporan otomatis jam 07:00 WIB</i>\n\n';
+      const footer = detailSaved ? '\n\n<i>Detail teknis disimpan → audit.txt</i>' : '';
 
       for (const adminId of ADMIN_USERS) {
         try {
           await sendLong({ replyWithHTML: (t, e) => _bot.telegram.sendMessage(adminId, t, { parse_mode: 'HTML', ...e }) },
-            header + digest
+            header + summary + footer
           );
           console.log(`[⏰ Scheduler] Digest terkirim ke admin ${adminId}`);
         } catch (err) {

@@ -178,16 +178,57 @@ function readProjectFiles(names = ADMIN_FILES, charsPerFile = CHARS_PER_FILE) {
 }
 
 // ─── Base Prompt ───────────────────────────────────────────────────────────────
-const AUDIT_SYSTEM_PROMPT = `Kamu adalah DevOps AI assistant untuk bot Telegram Node.js ini. Jawab SINGKAT dan PADAT — maksimal 300 kata. Tidak perlu intro, tidak perlu penutup basa-basi.
+const AUDIT_SYSTEM_PROMPT = `Kamu adalah DevOps AI assistant untuk bot Telegram. Output wajib dalam dua blok terpisah:
 
-Fokus HANYA pada temuan nyata. Kalau tidak ada masalah, bilang singkat. Jangan jelaskan hal yang sudah jelas atau tidak ada isu-nya.
+== BLOK 1: SUMMARY (wajib, dikirim ke Telegram) ==
+Format SCANNABLE, max 10 baris total:
 
-FORMAT — WAJIB:
-- Gunakan HANYA tag: <b>header</b> <i>catatan</i> <code>inline</code> <pre><code>kode</code></pre>
-- Daftar: "- item" biasa, bukan HTML list
-- DILARANG: markdown ** ## __, tag <ul> <ol> <li> <br> <h1-6>
-- Langsung ke poin. Tidak ada "Berikut adalah..." atau "Sebagai kesimpulan..."`;
+<b>Sistem</b>
+🔴/🟡/🟢 [satu temuan per baris, max 3 baris]
 
+<b>Keamanan</b>
+🔴/🟡/🟢 [satu temuan per baris, max 3 baris]
+
+<b>Bug Kode</b>
+🔴/🟡/🟢 [satu temuan per baris, max 3 baris]
+
+Aturan ketat:
+- 🔴 Kritis | 🟡 Warning | 🟢 Aman
+- Tiap baris MAX 1 kalimat pendek
+- Kalau suatu seksi aman semua: cukup tulis 🟢 Aman
+- HANYA tag: <b></b> <i></i> <code></code>
+- DILARANG: markdown ** ## __, tag HTML lain, intro/penutup basa-basi
+
+== BLOK 2: DETAIL (opsional, akan disimpan ke file) ==
+Tulis tepat setelah summary, dimulai dengan baris:
+---DETAIL---
+Lalu tulis analisis teknis selengkapnya (tanpa batas panjang).
+Kalau tidak ada detail tambahan, tidak perlu tulis blok ini.`;
+
+
+// ─── Parse & save audit detail to file ───────────────────────────────────────
+const AUDIT_DETAIL_FILE = path.join(PROJECT_ROOT, 'audit.txt');
+
+function parseAuditResponse(raw) {
+  const cleaned = raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  const marker  = '---DETAIL---';
+  const idx     = cleaned.indexOf(marker);
+
+  if (idx === -1) return { summary: cleaned, detailSaved: false };
+
+  const summary = cleaned.slice(0, idx).trim();
+  const detail  = cleaned.slice(idx + marker.length).trim();
+
+  if (detail) {
+    const timestamp = new Date().toISOString();
+    const header    = `=== Audit Detail — ${timestamp} ===\n\n`;
+    try {
+      fs.writeFileSync(AUDIT_DETAIL_FILE, header + detail, 'utf8');
+    } catch { /* non-fatal */ }
+  }
+
+  return { summary, detailSaved: !!detail };
+}
 
 // ─── analyzeCode: source code only ────────────────────────────────────────────
 // Budget: 12 file × 1000 chars = 12000 chars ≈ 3000 token → aman di bawah 6K TPM
@@ -205,9 +246,8 @@ async function analyzeCode(question, files = ADMIN_FILES) {
     max_tokens:  2048,
   });
 
-  // Strip Qwen3 think blocks sebelum dikembalikan
   const raw = completion.choices[0]?.message?.content || 'Tidak ada response dari AI.';
-  return raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  return parseAuditResponse(raw);
 }
 
 // ─── analyzeWithContext: code + logs + health + DB ────────────────────────────
@@ -258,7 +298,7 @@ async function analyzeWithContext(question) {
   });
 
   const rawCtx = completion.choices[0]?.message?.content || 'Tidak ada response dari AI.';
-  return rawCtx.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  return parseAuditResponse(rawCtx);
 }
 
 // ─── Daily Health Digest (untuk scheduler) ────────────────────────────────────
@@ -266,15 +306,9 @@ async function buildDailyDigest() {
   const [pmResult, dbHealth] = await Promise.all([getPM2Logs(100), getDBHealth()]);
   const health = getSystemHealth();
 
-  const question = [
-    'Lakukan analisa harian (daily health check) berdasarkan data berikut.',
-    'Fokus pada:',
-    '- Error berulang atau pattern aneh di log',
-    '- Indikasi memory leak (heap terus naik?)',
-    '- Performa DB (latency, jumlah session)',
-    '- Rekomendasi aksi konkret jika ada masalah',
-    '- Berikan penilaian kesehatan sistem: SEHAT / PERHATIAN / KRITIS',
-  ].join('\n');
+  const question =
+    'Daily health check. Cek error berulang di log, tren heap/RAM, latensi DB, dan session aktif. ' +
+    'Output: Executive Summary 3 seksi (Sistem, Keamanan, Bug Kode), max 10 baris, emoji status.';
 
   return analyzeWithContext(question);
 }

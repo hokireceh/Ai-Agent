@@ -277,17 +277,17 @@ function registerHandlers(bot) {
   bot.action('admin_diagnose', async (ctx) => {
     if (!adminGuard(ctx)) return;
     await ctx.answerCbQuery('🔍 Memulai deep audit...');
-    await ctx.reply('🔍 Mendiagnosa kode, log, dan kondisi sistem... (~20-40 detik)');
+    await ctx.reply('🔍 Diagnosa sistem, log, dan kode... (~15-30 detik)');
     const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
     try {
-      const result = await analyzeWithContext(
-        'Diagnosa bot ini secara mendalam. Gabungkan analisa source code, log runtime, dan kondisi sistem. ' +
-        'Temukan bug nyata, error berulang, indikasi memory leak, dan masalah performa. ' +
-        'Urutkan dari prioritas tertinggi ke terendah.'
+      const { summary, detailSaved } = await analyzeWithContext(
+        'Audit bot ini. Cek log untuk error nyata, heap/RAM untuk anomali, DB untuk latensi. ' +
+        'Output: Executive Summary 3 seksi (Sistem, Keamanan, Bug Kode), max 10 baris, emoji status.'
       );
       clearInterval(typingInterval);
       console.log('[👑 Admin] Deep diagnosis selesai');
-      await sendLong(ctx, result, adminMiniMenu);
+      const footer = detailSaved ? '\n\n<i>Detail teknis disimpan → audit.txt</i>' : '';
+      await sendLong(ctx, summary + footer, adminMiniMenu);
     } catch (err) {
       clearInterval(typingInterval);
       console.error('❌ [Admin Diagnose]:', err.message);
@@ -297,16 +297,18 @@ function registerHandlers(bot) {
 
   bot.action('admin_audit', async (ctx) => {
     if (!adminGuard(ctx)) return;
-    await ctx.answerCbQuery('📋 Memulai full audit...');
-    await ctx.reply('📋 Melakukan full audit komprehensif... (~30-60 detik)');
+    await ctx.answerCbQuery('📋 Memulai code audit...');
+    await ctx.reply('📋 Audit source code... (~15-30 detik)');
     const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
     try {
-      const result = await analyzeCode(
-        'Lakukan full audit komprehensif: arsitektur, keamanan, performa, maintainability, dan design patterns. Berikan skor 1-10 untuk setiap aspek dan rekomendasi spesifik.'
+      const { summary, detailSaved } = await analyzeCode(
+        'Audit source code: cek keamanan, bug potensial, dan arsitektur. ' +
+        'Output: Executive Summary 3 seksi (Sistem, Keamanan, Bug Kode), max 10 baris, emoji status.'
       );
       clearInterval(typingInterval);
       console.log('[👑 Admin] Full audit selesai');
-      await sendLong(ctx, result, adminMiniMenu);
+      const footer = detailSaved ? '\n\n<i>Detail teknis disimpan → audit.txt</i>' : '';
+      await sendLong(ctx, summary + footer, adminMiniMenu);
     } catch (err) {
       clearInterval(typingInterval);
       console.error('❌ [Admin Audit]:', err.message);
@@ -340,10 +342,11 @@ function registerHandlers(bot) {
       await ctx.sendChatAction('typing');
       const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
       try {
-        const result = await analyzeWithContext(userText);
+        const { summary, detailSaved } = await analyzeWithContext(userText);
         clearInterval(typingInterval);
-        console.log(`[📤] [admin:${ADMIN_MODEL}] ${result.slice(0, 60).replace(/\n/g, ' ')}...`);
-        await sendLong(ctx, result, {
+        console.log(`[📤] [admin:${ADMIN_MODEL}] ${summary.slice(0, 60).replace(/\n/g, ' ')}...`);
+        const footer = detailSaved ? '\n\n<i>Detail teknis disimpan → audit.txt</i>' : '';
+        await sendLong(ctx, summary + footer, {
           reply_parameters: { message_id: ctx.message.message_id },
           ...adminMiniMenu,
         });
