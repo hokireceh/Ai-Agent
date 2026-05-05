@@ -5,7 +5,7 @@ const { sessions, getSession, saveSession, saveSessions }                = requi
 const { groq, smartRequest, askWithGemini }                              = require('./router');
 const { sanitizeForTelegram, escapeHtml, downloadAsBase64, sendLong }    = require('./sanitizer');
 const {
-  groqAdmin, ADMIN_MODEL, isAdmin,
+  groqAdmin, groqPool, ADMIN_MODEL, isAdmin,
   analyzeWithContext,
   getSystemHealth, getDBHealth,
 } = require('./admin');
@@ -91,7 +91,10 @@ async function buildStatusText() {
   lines.push('', `<b>Gemini primary:</b> <code>${MODELS.flash25}</code>`);
   lines.push(`<b>Groq fallback:</b> <code>${GROQ_MODELS.versatile}</code>`);
   lines.push(`<b>Admin AI:</b> <code>${ADMIN_MODEL}</code>`);
-  lines.push(`<b>Groq Admin:</b> <code>${groqAdmin ? 'aktif' : 'tidak tersedia'}</code>`);
+  const poolInfo = groqPool.length === 0 ? 'tidak tersedia'
+    : groqPool.length === 1 ? 'aktif (1 key)'
+    : `aktif (${groqPool.length} key — ${groqPool.length}× kapasitas)`;
+  lines.push(`<b>Groq Admin:</b> <code>${poolInfo}</code>`);
 
   return lines.join('\n');
 }

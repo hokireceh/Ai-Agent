@@ -6,6 +6,12 @@ const GEMINI_KEY     = process.env.GEMINI_API_KEY;
 const GROQ_KEY       = process.env.GROQ_API_KEY;
 const GROQ_ADMIN_KEY = process.env.GROQ_ADMIN_API_KEY || GROQ_KEY;
 
+// Pool semua key unik untuk admin — gabungkan GROQ_ADMIN_API_KEY + GROQ_API_KEY
+// Duplikat dibuang otomatis, jadi aman meski pakai key yang sama
+const GROQ_ADMIN_KEYS = [...new Set(
+  [process.env.GROQ_ADMIN_API_KEY, process.env.GROQ_API_KEY].filter(Boolean)
+)];
+
 const ALLOWED_USERS = process.env.ALLOWED_USER_IDS
   ? process.env.ALLOWED_USER_IDS.split(',').map(Number)
   : [];
@@ -62,6 +68,7 @@ module.exports = {
   GEMINI_KEY,
   GROQ_KEY,
   GROQ_ADMIN_KEY,
+  GROQ_ADMIN_KEYS,
   ALLOWED_USERS,
   ADMIN_USERS,
   MODELS,

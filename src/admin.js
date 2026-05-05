@@ -9,12 +9,45 @@ const Groq          = require('groq-sdk');
 
 const execAsync = promisify(exec);
 
-const { GROQ_ADMIN_KEY, ADMIN_USERS, GROQ_MODELS } = require('./config');
-const { pool, sessions }                            = require('./utils/session');
+const { GROQ_ADMIN_KEYS, ADMIN_USERS, GROQ_MODELS } = require('./config');
+const { pool, sessions }                             = require('./utils/session');
 
 const PROJECT_ROOT = path.join(__dirname, '..');
 const ADMIN_MODEL  = GROQ_MODELS.qwen;
-const groqAdmin    = GROQ_ADMIN_KEY ? new Groq({ apiKey: GROQ_ADMIN_KEY }) : null;
+
+// ─── Multi-key Groq Pool ───────────────────────────────────────────────────────
+// Gabungkan semua key unik (GROQ_ADMIN_API_KEY + GROQ_API_KEY) → 2× kapasitas TPM
+const groqPool  = GROQ_ADMIN_KEYS.map(key => new Groq({ apiKey: key }));
+let   poolIndex = 0;
+
+function getNextClient() {
+  if (groqPool.length === 0) throw new Error('Tidak ada GROQ_API_KEY yang tersedia');
+  const client = groqPool[poolIndex];
+  poolIndex    = (poolIndex + 1) % groqPool.length;
+  return client;
+}
+
+// Panggil API dengan round-robin key + fallback ke key berikut jika rate limit
+async function groqCreate(params) {
+  let lastErr;
+  for (let attempt = 0; attempt < groqPool.length; attempt++) {
+    const client = groqPool[(poolIndex + attempt) % groqPool.length];
+    try {
+      const res = await client.chat.completions.create(params);
+      poolIndex  = (poolIndex + attempt + 1) % groqPool.length; // advance ke key berikutnya
+      return res;
+    } catch (err) {
+      lastErr = err;
+      const isRateLimit = err.status === 429 || err.message?.includes('rate_limit');
+      if (!isRateLimit || groqPool.length === 1) throw err;
+      console.warn(`[Admin Pool] Key #${(poolIndex + attempt) % groqPool.length} rate limited, coba key berikutnya...`);
+    }
+  }
+  throw lastErr;
+}
+
+// Untuk export legacy (digunakan handlers.js untuk cek ketersediaan)
+const groqAdmin = groqPool.length > 0 ? groqPool[0] : null;
 
 // ─── Guard ─────────────────────────────────────────────────────────────────────
 function isAdmin(userId) {
@@ -125,7 +158,7 @@ Aturan ketat:
 - Tag HTML: <b> <i> <code> saja — NO markdown, NO intro/outro basa-basi`;
 
 async function analyzeWithContext(question) {
-  if (!groqAdmin) throw new Error('GROQ Admin tidak tersedia');
+  if (groqPool.length === 0) throw new Error('Tidak ada GROQ API key yang tersedia');
 
   const [pmResult, dbHealth] = await Promise.all([getPM2Logs(80), getDBHealth()]);
 
@@ -139,7 +172,7 @@ async function analyzeWithContext(question) {
     `[TUGAS] ${question}`,
   ].join('\n\n');
 
-  const completion = await groqAdmin.chat.completions.create({
+  const completion = await groqCreate({
     model:    ADMIN_MODEL,
     messages: [
       { role: 'system', content: LOG_PROMPT },
@@ -155,6 +188,7 @@ async function analyzeWithContext(question) {
 
 module.exports = {
   groqAdmin,
+  groqPool,
   ADMIN_MODEL,
   isAdmin,
   analyzeWithContext,
