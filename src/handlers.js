@@ -111,12 +111,12 @@ function registerHandlers(bot) {
     const name    = ctx.from.first_name || 'bro';
     await ctx.replyWithHTML(
       `Halo <b>${name}</b>! 👋\n\nAku siap membantu. Ketik pesan atau pilih menu:`,
-      buildMainMenu(session)
+      buildMainMenu(session, isAdmin(ctx.from.id))
     );
   });
 
   bot.command('menu', authMiddleware, async (ctx) => {
-    await ctx.reply('Menu:', buildMainMenu(getSession(ctx.chat.id)));
+    await ctx.reply('Menu:', buildMainMenu(getSession(ctx.chat.id), isAdmin(ctx.from.id)));
   });
 
   bot.command('new', authMiddleware, async (ctx) => {
@@ -128,7 +128,7 @@ function registerHandlers(bot) {
 
   bot.command('info', authMiddleware, async (ctx) => {
     const session = getSession(ctx.chat.id);
-    await ctx.replyWithHTML(buildInfoText(session), buildMainMenu(session));
+    await ctx.replyWithHTML(buildInfoText(session), buildMainMenu(session, isAdmin(ctx.from.id)));
   });
 
   bot.command('admin', async (ctx) => {
@@ -145,7 +145,7 @@ function registerHandlers(bot) {
   // ── Main callbacks ────────────────────────────────────────────────────────────
   bot.action('show_menu', authMiddleware, async (ctx) => {
     await ctx.answerCbQuery();
-    await ctx.reply('Menu:', buildMainMenu(getSession(ctx.chat.id)));
+    await ctx.reply('Menu:', buildMainMenu(getSession(ctx.chat.id), isAdmin(ctx.from.id)));
   });
 
   bot.action('new_chat', authMiddleware, async (ctx) => {
@@ -170,7 +170,7 @@ function registerHandlers(bot) {
   bot.action('info', authMiddleware, async (ctx) => {
     const session = getSession(ctx.chat.id);
     await ctx.answerCbQuery();
-    await ctx.replyWithHTML(buildInfoText(session), buildMainMenu(session));
+    await ctx.replyWithHTML(buildInfoText(session), buildMainMenu(session, isAdmin(ctx.from.id)));
   });
 
   // Mode actions
@@ -230,7 +230,7 @@ function registerHandlers(bot) {
     session.adminMode = false;
     saveSession(ctx.chat.id);
     await ctx.answerCbQuery('✅ Keluar dari admin mode');
-    await ctx.reply('Mode admin dinonaktifkan.', buildMainMenu(session));
+    await ctx.reply('Mode admin dinonaktifkan.', buildMainMenu(session, isAdmin(ctx.from.id)));
   });
 
   // ── Admin Status: sekarang async + DB + system health ─────────────────────────

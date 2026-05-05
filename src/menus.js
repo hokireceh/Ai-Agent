@@ -5,14 +5,16 @@ const { MODEL_SHORT, MODELS, GROQ_MODELS } = require('./config');
 
 const MODE_EMOJI = { general: '💡', coding: '🧠', analyst: '📊', creative: '🎨' };
 
-function buildMainMenu(session) {
+function buildMainMenu(session, isAdmin = false) {
   const modeLabel  = `${MODE_EMOJI[session?.mode] ?? '💡'} ${(session?.mode ?? 'general').charAt(0).toUpperCase() + (session?.mode ?? 'general').slice(1)}`;
   const modelLabel = `🤖 ${MODEL_SHORT[session?.model] ?? 'Auto'}`;
-  return Markup.inlineKeyboard([
+  const rows = [
     [Markup.button.callback('💬 Chat Baru', 'new_chat'), Markup.button.callback('🗑️ Hapus History', 'clear_history')],
     [Markup.button.callback(`⚙️ Mode: ${modeLabel}`, 'mode_menu'), Markup.button.callback(modelLabel, 'model_menu')],
     [Markup.button.callback('ℹ️ Info', 'info')],
-  ]);
+  ];
+  if (isAdmin) rows.push([Markup.button.callback('🔐 Admin Panel', 'admin_panel')]);
+  return Markup.inlineKeyboard(rows);
 }
 
 const modeMenu = Markup.inlineKeyboard([
