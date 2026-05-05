@@ -280,14 +280,10 @@ function registerHandlers(bot) {
     await ctx.reply('🔍 Diagnosa sistem, log, dan kode... (~15-30 detik)');
     const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
     try {
-      const { summary, detailSaved } = await analyzeWithContext(
-        'Audit bot ini. Cek log untuk error nyata, heap/RAM untuk anomali, DB untuk latensi. ' +
-        'Output: Executive Summary 3 seksi (Sistem, Keamanan, Bug Kode), max 10 baris, emoji status.'
-      );
+      const result = await analyzeWithContext('Diagnosa: cek log error, heap/RAM, dan DB. Temukan masalah nyata.');
       clearInterval(typingInterval);
       console.log('[👑 Admin] Deep diagnosis selesai');
-      const footer = detailSaved ? '\n\n<i>Detail teknis disimpan → audit.txt</i>' : '';
-      await sendLong(ctx, summary + footer, adminMiniMenu);
+      await sendLong(ctx, result, adminMiniMenu);
     } catch (err) {
       clearInterval(typingInterval);
       console.error('❌ [Admin Diagnose]:', err.message);
@@ -301,14 +297,10 @@ function registerHandlers(bot) {
     await ctx.reply('📋 Audit source code... (~15-30 detik)');
     const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
     try {
-      const { summary, detailSaved } = await analyzeCode(
-        'Audit source code: cek keamanan, bug potensial, dan arsitektur. ' +
-        'Output: Executive Summary 3 seksi (Sistem, Keamanan, Bug Kode), max 10 baris, emoji status.'
-      );
+      const result = await analyzeCode('Audit source code: keamanan, bug potensial, dan arsitektur.');
       clearInterval(typingInterval);
       console.log('[👑 Admin] Full audit selesai');
-      const footer = detailSaved ? '\n\n<i>Detail teknis disimpan → audit.txt</i>' : '';
-      await sendLong(ctx, summary + footer, adminMiniMenu);
+      await sendLong(ctx, result, adminMiniMenu);
     } catch (err) {
       clearInterval(typingInterval);
       console.error('❌ [Admin Audit]:', err.message);
@@ -342,11 +334,10 @@ function registerHandlers(bot) {
       await ctx.sendChatAction('typing');
       const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
       try {
-        const { summary, detailSaved } = await analyzeWithContext(userText);
+        const result = await analyzeWithContext(userText);
         clearInterval(typingInterval);
-        console.log(`[📤] [admin:${ADMIN_MODEL}] ${summary.slice(0, 60).replace(/\n/g, ' ')}...`);
-        const footer = detailSaved ? '\n\n<i>Detail teknis disimpan → audit.txt</i>' : '';
-        await sendLong(ctx, summary + footer, {
+        console.log(`[📤] [admin:${ADMIN_MODEL}] ${result.slice(0, 60).replace(/\n/g, ' ')}...`);
+        await sendLong(ctx, result, {
           reply_parameters: { message_id: ctx.message.message_id },
           ...adminMiniMenu,
         });
