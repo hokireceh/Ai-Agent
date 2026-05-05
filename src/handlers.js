@@ -6,7 +6,7 @@ const { groq, smartRequest, askWithGemini }                              = requi
 const { sanitizeForTelegram, escapeHtml, downloadAsBase64, sendLong }    = require('./sanitizer');
 const {
   groqAdmin, ADMIN_MODEL, isAdmin,
-  analyzeCode, analyzeWithContext,
+  analyzeWithContext,
   getSystemHealth, getDBHealth,
 } = require('./admin');
 const {
@@ -276,13 +276,13 @@ function registerHandlers(bot) {
 
   bot.action('admin_diagnose', async (ctx) => {
     if (!adminGuard(ctx)) return;
-    await ctx.answerCbQuery('🔍 Memulai deep audit...');
-    await ctx.reply('🔍 Diagnosa sistem, log, dan kode... (~15-30 detik)');
+    await ctx.answerCbQuery('🔍 Membaca log...');
+    await ctx.reply('🔍 Menganalisa runtime log... (~10-20 detik)');
     const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
     try {
-      const result = await analyzeWithContext('Diagnosa: cek log error, heap/RAM, dan DB. Temukan masalah nyata.');
+      const result = await analyzeWithContext('Identifikasi error nyata, exception, atau anomali dari log ini. Hanya yang benar-benar ada di log.');
       clearInterval(typingInterval);
-      console.log('[👑 Admin] Deep diagnosis selesai');
+      console.log('[👑 Admin] Log diagnosa selesai');
       await sendLong(ctx, result, adminMiniMenu);
     } catch (err) {
       clearInterval(typingInterval);
@@ -291,19 +291,15 @@ function registerHandlers(bot) {
     }
   });
 
-  bot.action('admin_audit', async (ctx) => {
+  bot.action('admin_rawlog', async (ctx) => {
     if (!adminGuard(ctx)) return;
-    await ctx.answerCbQuery('📋 Memulai code audit...');
-    await ctx.reply('📋 Audit source code... (~15-30 detik)');
-    const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
+    await ctx.answerCbQuery('📜 Mengambil log...');
     try {
-      const result = await analyzeCode('Audit source code: keamanan, bug potensial, dan arsitektur.');
-      clearInterval(typingInterval);
-      console.log('[👑 Admin] Full audit selesai');
-      await sendLong(ctx, result, adminMiniMenu);
+      const { source, logs } = await getPM2Logs(60);
+      const header = `<b>📜 Log Mentah</b> <i>(sumber: ${source})</i>\n\n`;
+      const body   = logs.length > 3800 ? logs.slice(-3800) : logs;
+      await sendLong(ctx, header + '<pre><code>' + escapeHtml(body) + '</code></pre>', adminMiniMenu);
     } catch (err) {
-      clearInterval(typingInterval);
-      console.error('❌ [Admin Audit]:', err.message);
       await ctx.replyWithHTML(`❌ Error: <code>${escapeHtml(err.message?.slice(0, 120))}</code>`, adminMiniMenu);
     }
   });

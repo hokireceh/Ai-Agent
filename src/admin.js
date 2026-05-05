@@ -60,7 +60,7 @@ function getSystemHealth() {
 }
 
 // ─── PM2 / Runtime Log Reader ──────────────────────────────────────────────────
-async function getPM2Logs(lines = 60) {
+async function getPM2Logs(lines = 80) {
   // Strategy 1: pm2 CLI
   try {
     const { stdout, stderr } = await execAsync(
@@ -68,7 +68,7 @@ async function getPM2Logs(lines = 60) {
       { timeout: 8000 }
     );
     const out = (stdout + '\n' + stderr).trim();
-    if (out.length > 20) return { source: 'pm2', logs: out.slice(-6000) };
+    if (out.length > 20) return { source: 'pm2', logs: out };
   } catch {}
 
   // Strategy 2: pm2 log files
@@ -87,7 +87,7 @@ async function getPM2Logs(lines = 60) {
         return `[${f}]\n${full.split('\n').slice(-Math.ceil(lines / files.length)).join('\n')}`;
       }).join('\n\n');
 
-      if (content.trim().length > 20) return { source: 'pm2-files', logs: content.slice(-6000) };
+      if (content.trim().length > 20) return { source: 'pm2-files', logs: content };
     }
   } catch {}
 
@@ -113,92 +113,39 @@ async function getDBHealth() {
   }
 }
 
-// ─── Source Code Reader ────────────────────────────────────────────────────────
-// 6 file kunci × 2000 chars ≈ 3000 token — cukup untuk audit bermakna
-const ADMIN_FILES = [
-  'src/router.js',
-  'src/handlers.js',
-  'src/prompts.js',
-  'src/menus.js',
-  'src/admin.js',
-  'index.js',
-];
-const CHARS_PER_FILE = 2000;
+// ─── AI: Log Diagnosa ──────────────────────────────────────────────────────────
+// Hanya baca log runtime + DB health — data nyata, bukan kode
+const LOG_PROMPT = `Kamu menganalisa runtime log dari bot Telegram Node.js.
+Tugasmu: identifikasi error nyata, exception, crash, atau anomali dari teks log.
 
-function readProjectFiles(names = ADMIN_FILES) {
-  return names.map(name => {
-    try {
-      const content = fs.readFileSync(path.join(PROJECT_ROOT, name), 'utf8');
-      const snippet = content.slice(0, CHARS_PER_FILE);
-      const note    = content.length > CHARS_PER_FILE ? ` [+${content.length - CHARS_PER_FILE}ch]` : '';
-      return `=== ${name}${note} ===\n${snippet}`;
-    } catch {
-      return `=== ${name} === [tidak ditemukan]`;
-    }
-  }).join('\n\n');
-}
+Aturan ketat:
+- Hanya laporkan yang ADA di log — jangan asumsi atau tambah temuan dari imajinasi
+- Kalau log bersih: tulis saja "🟢 Log bersih, tidak ada error."
+- Format ringkas: max 10 baris, 1 temuan per baris
+- Tag HTML: <b> <i> <code> saja — NO markdown, NO intro/outro basa-basi`;
 
-// ─── System Prompt ─────────────────────────────────────────────────────────────
-const AUDIT_SYSTEM_PROMPT = `Kamu adalah DevOps assistant untuk bot Telegram Node.js. Jawab ringkas dalam format HTML Telegram.
-
-Struktur output (max 10 baris total):
-<b>Sistem</b>
-🔴/🟡/🟢 temuan singkat
-
-<b>Keamanan</b>
-🔴/🟡/🟢 temuan singkat
-
-<b>Bug Kode</b>
-🔴/🟡/🟢 temuan singkat
-
-Aturan:
-- 🔴 Kritis | 🟡 Perhatian | 🟢 Aman
-- 1 baris per temuan, padat
-- Seksi aman → cukup tulis 🟢 Aman
-- Tag: <b> <i> <code> saja — NO markdown, NO intro/outro`;
-
-// ─── AI: Full Audit (code only) ────────────────────────────────────────────────
-async function analyzeCode(question, files = ADMIN_FILES) {
-  if (!groqAdmin) throw new Error('GROQ Admin tidak tersedia');
-
-  const completion = await groqAdmin.chat.completions.create({
-    model:    ADMIN_MODEL,
-    messages: [
-      { role: 'system', content: AUDIT_SYSTEM_PROMPT },
-      { role: 'user',   content: `Source code:\n\n${readProjectFiles(files)}\n\n---\n${question}` },
-    ],
-    temperature: 0.2,
-    max_tokens:  1024,
-  });
-
-  const raw = completion.choices[0]?.message?.content || 'Tidak ada response.';
-  return raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-}
-
-// ─── AI: Deep Diagnosis (code + logs) ─────────────────────────────────────────
 async function analyzeWithContext(question) {
   if (!groqAdmin) throw new Error('GROQ Admin tidak tersedia');
 
-  const [pmResult, dbHealth] = await Promise.all([getPM2Logs(50), getDBHealth()]);
+  const [pmResult, dbHealth] = await Promise.all([getPM2Logs(80), getDBHealth()]);
 
   const dbLine = dbHealth.status === 'OK'
-    ? `DB OK | ${dbHealth.latencyMs}ms | sessions: ${dbHealth.activeSessions}/${dbHealth.totalSessions}`
-    : `DB ERROR: ${dbHealth.error}`;
+    ? `OK | ${dbHealth.latencyMs}ms | sessions aktif: ${dbHealth.activeSessions}/${dbHealth.totalSessions}`
+    : `ERROR: ${dbHealth.error}`;
 
   const userContent = [
-    `[LOGS — ${pmResult.source}]\n${pmResult.logs.slice(-1500)}`,
-    `[DB] ${dbLine}`,
-    `[CODE]\n${readProjectFiles()}`,
+    `[RUNTIME LOGS — sumber: ${pmResult.source}]\n${pmResult.logs}`,
+    `[DB STATUS] ${dbLine}`,
     `[TUGAS] ${question}`,
   ].join('\n\n');
 
   const completion = await groqAdmin.chat.completions.create({
     model:    ADMIN_MODEL,
     messages: [
-      { role: 'system', content: AUDIT_SYSTEM_PROMPT },
+      { role: 'system', content: LOG_PROMPT },
       { role: 'user',   content: userContent },
     ],
-    temperature: 0.2,
+    temperature: 0.1,
     max_tokens:  1024,
   });
 
@@ -209,10 +156,7 @@ async function analyzeWithContext(question) {
 module.exports = {
   groqAdmin,
   ADMIN_MODEL,
-  ADMIN_FILES,
   isAdmin,
-  readProjectFiles,
-  analyzeCode,
   analyzeWithContext,
   getSystemHealth,
   getPM2Logs,
