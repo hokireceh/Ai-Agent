@@ -216,7 +216,9 @@ async function analyzeCode(question, files = ADMIN_FILES) {
     max_tokens:  2048,
   });
 
-  return completion.choices[0]?.message?.content || 'Tidak ada response dari AI.';
+  // Strip Qwen3 think blocks sebelum dikembalikan
+  const raw = completion.choices[0]?.message?.content || 'Tidak ada response dari AI.';
+  return raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 }
 
 // ─── analyzeWithContext: code + logs + health + DB ────────────────────────────
@@ -266,7 +268,8 @@ async function analyzeWithContext(question) {
     max_tokens:  2048,
   });
 
-  return completion.choices[0]?.message?.content || 'Tidak ada response dari AI.';
+  const rawCtx = completion.choices[0]?.message?.content || 'Tidak ada response dari AI.';
+  return rawCtx.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 }
 
 // ─── Daily Health Digest (untuk scheduler) ────────────────────────────────────

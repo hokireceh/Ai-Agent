@@ -1,9 +1,12 @@
 'use strict';
 
 // Sanitize AI response → safe Telegram HTML
-// Pipeline: markdown → illegal-tag conversion → strip → escape bare angles → restore valid tags
+// Pipeline: strip think blocks → markdown → illegal-tag conversion → strip → escape → restore valid tags
 function sanitizeForTelegram(raw = '') {
   let text = raw;
+
+  // 0. Strip Qwen3 <think>...</think> reasoning blocks (always hidden from user)
+  text = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 
   // 1. Markdown triple-backtick → <pre><code> (escape content inside)
   text = text.replace(/```[\w]*\n?([\s\S]*?)```/g, (_, code) => {
@@ -23,7 +26,18 @@ function sanitizeForTelegram(raw = '') {
     return `<code>${safe}</code>`;
   });
 
-  // 3. Protect valid Telegram tags with placeholders
+  // 3. Markdown headings → <b> (##, ###, #### → bold)
+  text = text.replace(/^#{1,6}\s+(.+)$/gm, (_, content) => `<b>${content.trim()}</b>`);
+
+  // 4. Markdown bold **text** or __text__ → <b>
+  text = text.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+  text = text.replace(/__(.+?)__/g, '<b>$1</b>');
+
+  // 5. Markdown italic *text* or _text_ → <i> (single star/underscore, not double)
+  text = text.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<i>$1</i>');
+  text = text.replace(/(?<!_)_(?!_)(.+?)(?<!_)_(?!_)/g, '<i>$1</i>');
+
+  // 6. Protect valid Telegram tags with placeholders
   const saved = [];
   const VALID = /(<\/?(b|i|s|u|code|pre|a)(?:\s[^>]*)?>)/gi;
   text = text.replace(VALID, (match) => {
@@ -31,28 +45,28 @@ function sanitizeForTelegram(raw = '') {
     return `\x00${saved.length - 1}\x00`;
   });
 
-  // 4. Convert illegal tags to plain-text equivalents
+  // 7. Convert illegal HTML tags to plain-text equivalents
   text = text.replace(/<br\s*\/?>/gi, '\n');
   text = text.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (_, c) =>
     '- ' + c.replace(/<[^>]*>/g, '').trim() + '\n'
   );
   text = text.replace(/<\/?(?:ul|ol)[^>]*>/gi, '');
   text = text.replace(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi, (_, c) =>
-    c.replace(/<[^>]*>/g, '').trim() + '\n'
+    '<b>' + c.replace(/<[^>]*>/g, '').trim() + '</b>\n'
   );
 
-  // 5. Strip any remaining unknown tags
+  // 8. Strip any remaining unknown tags
   text = text.replace(/<[^>]+>/g, '');
 
-  // 6. Escape bare & < > that survived (not inside placeholders)
+  // 9. Escape bare & < > that survived (not inside placeholders)
   text = text.replace(/&(?!amp;|lt;|gt;|quot;|#\d+;|#x[\da-f]+;)/gi, '&amp;');
   text = text.replace(/</g, '&lt;');
   text = text.replace(/>/g, '&gt;');
 
-  // 7. Restore valid tags
+  // 10. Restore valid tags
   text = text.replace(/\x00(\d+)\x00/g, (_, i) => saved[+i]);
 
-  // 8. Collapse 3+ consecutive blank lines → 2
+  // 11. Collapse 3+ consecutive blank lines → 2
   text = text.replace(/\n{3,}/g, '\n\n');
 
   return text.trim();
