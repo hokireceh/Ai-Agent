@@ -9,7 +9,7 @@ const {
   analyzeCode, analyzeWithContext,
   getSystemHealth, getPM2Logs, getDBHealth,
 } = require('./admin');
-const { buildMainMenu, modeMenu, modelMenu, miniMenu, adminMenu, adminMiniMenu } = require('./menus');
+const { buildMainMenu, buildReplyMenu, REPLY_BTN, modeMenu, modelMenu, miniMenu, adminMenu, adminMiniMenu } = require('./menus');
 
 // ─── Auth ──────────────────────────────────────────────────────────────────────
 function isAllowed(userId) {
@@ -107,16 +107,23 @@ function registerHandlers(bot) {
 
   // ── Commands ──────────────────────────────────────────────────────────────────
   bot.start(authMiddleware, async (ctx) => {
-    const session = getSession(ctx.chat.id);
-    const name    = ctx.from.first_name || 'bro';
+    const session   = getSession(ctx.chat.id);
+    const name      = ctx.from.first_name || 'bro';
+    const adminFlag = isAdmin(ctx.from.id);
     await ctx.replyWithHTML(
-      `Halo <b>${name}</b>! 👋\n\nAku siap membantu. Ketik pesan atau pilih menu:`,
-      buildMainMenu(session, isAdmin(ctx.from.id))
+      `Halo <b>${name}</b>! 👋\n\nAku siap membantu. Keyboard menu sudah aktif di bawah layarmu.`,
+      buildReplyMenu(adminFlag)
+    );
+    await ctx.replyWithHTML(
+      'Pilih aksi cepat atau langsung ketik pertanyaanmu:',
+      buildMainMenu(session, adminFlag)
     );
   });
 
   bot.command('menu', authMiddleware, async (ctx) => {
-    await ctx.reply('Menu:', buildMainMenu(getSession(ctx.chat.id), isAdmin(ctx.from.id)));
+    const adminFlag = isAdmin(ctx.from.id);
+    await ctx.reply('Keyboard aktif:', buildReplyMenu(adminFlag));
+    await ctx.reply('Menu:', buildMainMenu(getSession(ctx.chat.id), adminFlag));
   });
 
   bot.command('new', authMiddleware, async (ctx) => {
@@ -318,9 +325,50 @@ function registerHandlers(bot) {
 
   // ── Handler: Text ─────────────────────────────────────────────────────────────
   bot.on('text', authMiddleware, async (ctx) => {
-    const chatId   = ctx.chat.id;
-    const userText = ctx.message.text.trim();
-    const session  = getSession(chatId);
+    const chatId    = ctx.chat.id;
+    const userText  = ctx.message.text.trim();
+    const session   = getSession(chatId);
+    const adminFlag = isAdmin(ctx.from.id);
+
+    // ── Reply Keyboard interceptor ─────────────────────────────────────────────
+    switch (userText) {
+      case REPLY_BTN.newChat:
+        session.history = [];
+        saveSession(chatId);
+        await ctx.reply('✅ Chat baru dimulai. Silakan ketik pertanyaanmu.');
+        return;
+
+      case REPLY_BTN.clearHist:
+        session.history = [];
+        saveSession(chatId);
+        await ctx.reply('🗑️ History percakapan dihapus.');
+        return;
+
+      case REPLY_BTN.mode:
+        await ctx.reply('Pilih mode:', modeMenu);
+        return;
+
+      case REPLY_BTN.model:
+        await ctx.reply('Pilih model:', modelMenu);
+        return;
+
+      case REPLY_BTN.info:
+        await ctx.replyWithHTML(buildInfoText(session), buildMainMenu(session, adminFlag));
+        return;
+
+      case REPLY_BTN.adminPanel:
+        if (!adminFlag) {
+          await ctx.reply('⛔ Akses ditolak.');
+          return;
+        }
+        session.adminMode = true;
+        saveSession(chatId);
+        await ctx.replyWithHTML(
+          `<b>🔐 Admin Panel</b>\n\nMode admin aktif. Ketik pertanyaan langsung untuk analisis kode, atau pilih aksi di bawah.\n\n<i>AI: ${ADMIN_MODEL}</i>`,
+          adminMenu
+        );
+        return;
+    }
 
     // Admin mode: route to code analyzer
     if (session.adminMode && isAdmin(ctx.from.id)) {

@@ -36,6 +36,26 @@ const miniMenu = Markup.inlineKeyboard([
   [Markup.button.callback('📋 Menu', 'show_menu'), Markup.button.callback('💬 Chat Baru', 'new_chat')],
 ]);
 
+// ─── Reply Keyboard: persisten di bawah layar ──────────────────────────────────
+const REPLY_BTN = {
+  newChat:    '💬 Chat Baru',
+  clearHist:  '🗑️ Hapus History',
+  mode:       '⚙️ Mode',
+  model:      '🤖 Model',
+  info:       'ℹ️ Info',
+  adminPanel: '🔐 Admin Panel',
+};
+
+function buildReplyMenu(isAdmin = false) {
+  const rows = [
+    [REPLY_BTN.newChat,   REPLY_BTN.clearHist],
+    [REPLY_BTN.mode,      REPLY_BTN.model],
+    [REPLY_BTN.info],
+  ];
+  if (isAdmin) rows.push([REPLY_BTN.adminPanel]);
+  return Markup.keyboard(rows).resize();
+}
+
 const adminMenu = Markup.inlineKeyboard([
   [Markup.button.callback('🔍 Deep Audit', 'admin_diagnose'), Markup.button.callback('📋 Full Audit', 'admin_audit')],
   [Markup.button.callback('📊 System Status', 'admin_status'), Markup.button.callback('🧹 Reset Semua Session', 'admin_reset_all')],
@@ -49,7 +69,9 @@ const adminMiniMenu = Markup.inlineKeyboard([
 
 module.exports = {
   MODE_EMOJI,
+  REPLY_BTN,
   buildMainMenu,
+  buildReplyMenu,
   modeMenu,
   modelMenu,
   miniMenu,
