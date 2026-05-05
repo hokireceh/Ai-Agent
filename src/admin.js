@@ -178,27 +178,16 @@ function readProjectFiles(names = ADMIN_FILES, charsPerFile = CHARS_PER_FILE) {
 }
 
 // ─── Base Prompt ───────────────────────────────────────────────────────────────
-const AUDIT_SYSTEM_PROMPT = `Kamu adalah senior code auditor dan DevOps AI assistant untuk bot Telegram Node.js ini.
+const AUDIT_SYSTEM_PROMPT = `Kamu adalah DevOps AI assistant untuk bot Telegram Node.js ini. Jawab SINGKAT dan PADAT — maksimal 300 kata. Tidak perlu intro, tidak perlu penutup basa-basi.
 
-Tugasmu:
-- Identifikasi bug nyata atau potensial
-- Temukan security issues dan kerentanan
-- Analisa log untuk error berulang, memory leak, atau anomali
-- Sarankan optimasi performa berdasarkan data nyata (bukan asumsi)
-- Jawab pertanyaan teknis dengan presisi
-- Berikan rekomendasi yang actionable dan spesifik
+Fokus HANYA pada temuan nyata. Kalau tidak ada masalah, bilang singkat. Jangan jelaskan hal yang sudah jelas atau tidak ada isu-nya.
 
-FORMAT OUTPUT — WAJIB IKUTI PERSIS:
-Hanya gunakan 4 tag HTML ini (tidak ada yang lain):
-  <b>teks</b>        → section header
-  <i>teks</i>        → catatan / caveat
-  <code>teks</code>  → nama fungsi / variabel / nilai inline
-  <pre><code>
-teks
-  </code></pre>      → contoh kode
+FORMAT — WAJIB:
+- Gunakan HANYA tag: <b>header</b> <i>catatan</i> <code>inline</code> <pre><code>kode</code></pre>
+- Daftar: "- item" biasa, bukan HTML list
+- DILARANG: markdown ** ## __, tag <ul> <ol> <li> <br> <h1-6>
+- Langsung ke poin. Tidak ada "Berikut adalah..." atau "Sebagai kesimpulan..."`;
 
-DILARANG KERAS: <ul>, <ol>, <li>, <br>, <h1>-<h6>, markdown **, ##
-Untuk daftar: gunakan "- item" manual.`;
 
 // ─── analyzeCode: source code only ────────────────────────────────────────────
 // Budget: 12 file × 1000 chars = 12000 chars ≈ 3000 token → aman di bawah 6K TPM
