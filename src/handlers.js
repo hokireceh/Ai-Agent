@@ -1,15 +1,23 @@
 'use strict';
 
 const { ALLOWED_USERS, ADMIN_USERS, MODELS, GROQ_MODELS, MODEL_LABELS } = require('./config');
-const { sessions, getSession, saveSession, saveSessions } = require('./utils/session');
-const { groq, smartRequest, askWithGemini }               = require('./router');
-const { sanitizeForTelegram, escapeHtml, downloadAsBase64, sendLong } = require('./sanitizer');
+const { sessions, getSession, saveSession, saveSessions }                = require('./utils/session');
+const { groq, smartRequest, askWithGemini }                              = require('./router');
+const { sanitizeForTelegram, escapeHtml, downloadAsBase64, sendLong }    = require('./sanitizer');
 const {
   groqAdmin, ADMIN_MODEL, isAdmin,
   analyzeCode, analyzeWithContext,
-  getSystemHealth, getPM2Logs, getDBHealth,
+  getSystemHealth, getDBHealth,
 } = require('./admin');
-const { buildMainMenu, buildReplyMenu, REPLY_BTN, modeMenu, modelMenu, miniMenu, adminMenu, adminMiniMenu } = require('./menus');
+const {
+  REPLY_BTN,
+  buildReplyMenu,
+  buildCommandPalette,
+  modelMenu,
+  miniMenu,
+  adminMenu,
+  adminMiniMenu,
+} = require('./menus');
 
 // ─── Auth ──────────────────────────────────────────────────────────────────────
 function isAllowed(userId) {
@@ -30,16 +38,16 @@ function buildInfoText(session) {
   return [
     '<b>ℹ️ Info Bot</b>',
     '',
-    `Mode: <code>${session.mode}</code>`,
-    `Model: <code>${MODEL_LABELS[session.model] ?? session.model}</code>`,
+    `Model aktif: <code>${MODEL_LABELS[session.model] ?? session.model}</code>`,
     `History: <code>${Math.floor(session.history.length / 2)} exchange</code>`,
+    '<i>Konteks percakapan terdeteksi otomatis.</i>',
     '',
-    '<b>Gemini Models:</b>',
+    '<b>Gemini:</b>',
     `✨ <code>${MODELS.flash25}</code>`,
     `🧠 <code>${MODELS.pro}</code>`,
     `🔥 <code>${MODELS.flash}</code>`,
     '',
-    `<b>Groq Models:</b> ${groq ? 'aktif' : '⚠️ tidak aktif (no GROQ_API_KEY)'}`,
+    `<b>Groq:</b> ${groq ? 'aktif' : '⚠️ tidak aktif'}`,
     groq ? `⚡ <code>${GROQ_MODELS.instant}</code>`   : '',
     groq ? `🦙 <code>${GROQ_MODELS.versatile}</code>` : '',
     groq ? `🐉 <code>${GROQ_MODELS.qwen}</code>`      : '',
@@ -50,13 +58,12 @@ function buildInfoText(session) {
 async function buildStatusText() {
   const h  = getSystemHealth();
   const db = await getDBHealth();
-  const uptime = h.uptimeFormatted;
   const totalSessions  = sessions.size;
   const activeSessions = [...sessions.values()].filter(v => v.history?.length > 0).length;
 
   const lines = [
     '<b>📊 System Status</b>', '',
-    `<b>Uptime:</b> <code>${uptime}</code>`,
+    `<b>Uptime:</b> <code>${h.uptimeFormatted}</code>`,
     `<b>Heap:</b> <code>${h.heapUsedMB} MB / ${h.heapTotalMB} MB</code>`,
     `<b>RSS:</b> <code>${h.rssMB} MB</code>`,
     `<b>System RAM:</b> <code>${h.systemRamUsedMB} MB / ${h.systemRamTotalMB} MB (${h.ramUsedPct}%)</code>`,
@@ -72,20 +79,16 @@ async function buildStatusText() {
     lines.push(`<b>RAM Status:</b> ${h.ramWarning}`);
   }
 
-  lines.push('');
-  lines.push('<b>Sessions total:</b> <code>' + totalSessions + '</code>');
-  lines.push('<b>Sessions aktif:</b> <code>' + activeSessions + '</code>');
-  lines.push('');
+  lines.push('', `<b>Sessions total:</b> <code>${totalSessions}</code>`);
+  lines.push(`<b>Sessions aktif:</b> <code>${activeSessions}</code>`, '');
   lines.push('<b>NeonDB:</b>');
   if (db.status === 'OK') {
     lines.push(`- Status: <code>OK</code> | Latency: <code>${db.latencyMs}ms</code>`);
     lines.push(`- Total: <code>${db.totalSessions}</code> | Aktif: <code>${db.activeSessions}</code>`);
   } else {
-    lines.push(`- Status: <code>ERROR</code>`);
-    lines.push(`- <code>${escapeHtml(db.error ?? '')}</code>`);
+    lines.push(`- Status: <code>ERROR</code> — <code>${escapeHtml(db.error ?? '')}</code>`);
   }
-  lines.push('');
-  lines.push(`<b>Gemini primary:</b> <code>${MODELS.flash25}</code>`);
+  lines.push('', `<b>Gemini primary:</b> <code>${MODELS.flash25}</code>`);
   lines.push(`<b>Groq fallback:</b> <code>${GROQ_MODELS.versatile}</code>`);
   lines.push(`<b>Admin AI:</b> <code>${ADMIN_MODEL}</code>`);
   lines.push(`<b>Groq Admin:</b> <code>${groqAdmin ? 'aktif' : 'tidak tersedia'}</code>`);
@@ -111,19 +114,16 @@ function registerHandlers(bot) {
     const name      = ctx.from.first_name || 'bro';
     const adminFlag = isAdmin(ctx.from.id);
     await ctx.replyWithHTML(
-      `Halo <b>${name}</b>! 👋\n\nAku siap membantu. Keyboard menu sudah aktif di bawah layarmu.`,
-      buildReplyMenu(adminFlag)
+      `Halo <b>${name}</b>! 👋\n\nAku siap membantu — langsung ketik saja. Konteks percakapanmu terdeteksi otomatis.\n\nGunakan tombol <b>⌨️ Perintah</b> di keyboard untuk navigasi.`,
+      buildReplyMenu()
     );
-    await ctx.replyWithHTML(
-      'Pilih aksi cepat atau langsung ketik pertanyaanmu:',
-      buildMainMenu(session, adminFlag)
-    );
+    await ctx.replyWithHTML('Apa yang bisa aku bantu?', buildCommandPalette(session, adminFlag));
   });
 
   bot.command('menu', authMiddleware, async (ctx) => {
+    const session   = getSession(ctx.chat.id);
     const adminFlag = isAdmin(ctx.from.id);
-    await ctx.reply('Keyboard aktif:', buildReplyMenu(adminFlag));
-    await ctx.reply('Menu:', buildMainMenu(getSession(ctx.chat.id), adminFlag));
+    await ctx.reply('Perintah:', buildCommandPalette(session, adminFlag));
   });
 
   bot.command('new', authMiddleware, async (ctx) => {
@@ -134,8 +134,9 @@ function registerHandlers(bot) {
   });
 
   bot.command('info', authMiddleware, async (ctx) => {
-    const session = getSession(ctx.chat.id);
-    await ctx.replyWithHTML(buildInfoText(session), buildMainMenu(session, isAdmin(ctx.from.id)));
+    const session   = getSession(ctx.chat.id);
+    const adminFlag = isAdmin(ctx.from.id);
+    await ctx.replyWithHTML(buildInfoText(session), buildCommandPalette(session, adminFlag));
   });
 
   bot.command('admin', async (ctx) => {
@@ -144,15 +145,17 @@ function registerHandlers(bot) {
     session.adminMode = true;
     saveSession(ctx.chat.id);
     await ctx.replyWithHTML(
-      `<b>🔐 Admin Panel</b>\n\nMode admin aktif. Ketik pertanyaan langsung untuk analisis kode, atau pilih aksi di bawah.\n\n<i>AI: ${ADMIN_MODEL}</i>`,
+      `<b>🔐 Admin Panel</b>\n\nMode admin aktif.\n\n<i>AI: ${ADMIN_MODEL}</i>`,
       adminMenu
     );
   });
 
-  // ── Main callbacks ────────────────────────────────────────────────────────────
-  bot.action('show_menu', authMiddleware, async (ctx) => {
+  // ── Command Palette callbacks ──────────────────────────────────────────────────
+  bot.action('show_palette', authMiddleware, async (ctx) => {
+    const session   = getSession(ctx.chat.id);
+    const adminFlag = isAdmin(ctx.from.id);
     await ctx.answerCbQuery();
-    await ctx.reply('Menu:', buildMainMenu(getSession(ctx.chat.id), isAdmin(ctx.from.id)));
+    await ctx.reply('Perintah:', buildCommandPalette(session, adminFlag));
   });
 
   bot.action('new_chat', authMiddleware, async (ctx) => {
@@ -171,42 +174,28 @@ function registerHandlers(bot) {
     await ctx.reply('History percakapan dihapus.');
   });
 
-  bot.action('mode_menu',  authMiddleware, async (ctx) => { await ctx.answerCbQuery(); await ctx.reply('Pilih mode:', modeMenu); });
-  bot.action('model_menu', authMiddleware, async (ctx) => { await ctx.answerCbQuery(); await ctx.reply('Pilih model:', modelMenu); });
-
-  bot.action('info', authMiddleware, async (ctx) => {
-    const session = getSession(ctx.chat.id);
+  bot.action('model_menu', authMiddleware, async (ctx) => {
     await ctx.answerCbQuery();
-    await ctx.replyWithHTML(buildInfoText(session), buildMainMenu(session, isAdmin(ctx.from.id)));
+    await ctx.reply('Pilih model:', modelMenu);
   });
 
-  // Mode actions
-  const MODE_ACTIONS = [
-    ['mode_general',  'general',  '💡 Mode General aktif'],
-    ['mode_coding',   'coding',   '🧠 Mode Coding aktif'],
-    ['mode_analyst',  'analyst',  '📊 Mode Analyst aktif'],
-    ['mode_creative', 'creative', '🎨 Mode Creative aktif'],
-  ];
-  for (const [action, mode, label] of MODE_ACTIONS) {
-    bot.action(action, authMiddleware, async (ctx) => {
-      const session = getSession(ctx.chat.id);
-      session.mode  = mode;
-      saveSession(ctx.chat.id);
-      await ctx.answerCbQuery(`✅ ${label}`);
-      await ctx.replyWithHTML(`<b>${label}</b>`);
-    });
-  }
+  bot.action('info', authMiddleware, async (ctx) => {
+    const session   = getSession(ctx.chat.id);
+    const adminFlag = isAdmin(ctx.from.id);
+    await ctx.answerCbQuery();
+    await ctx.replyWithHTML(buildInfoText(session), buildCommandPalette(session, adminFlag));
+  });
 
-  // Model actions
+  // ── Model actions ──────────────────────────────────────────────────────────────
   const MODEL_ACTIONS = [
-    ['model_auto',           'auto',                  '🔄 Auto Cascade aktif'],
-    ['model_flash25',        MODELS.flash25,          '✨ Gemini Flash 2.5 aktif'],
-    ['model_pro',            MODELS.pro,              '🧠 Gemini Pro 2.5 aktif'],
-    ['model_flash',          MODELS.flash,            '🔥 Gemini Flash 2.0 aktif'],
-    ['model_lite',           MODELS.lite,             '⚡ Gemini Lite aktif'],
-    ['model_groq_instant',   GROQ_MODELS.instant,     '⚡ Llama 8B (Groq) aktif'],
-    ['model_groq_versatile', GROQ_MODELS.versatile,   '🦙 Llama 70B (Groq) aktif'],
-    ['model_groq_qwen',      GROQ_MODELS.qwen,        '🐉 Qwen3 32B (Groq) aktif'],
+    ['model_auto',           'auto',                '🔄 Auto aktif'],
+    ['model_flash25',        MODELS.flash25,        '✨ Gemini Flash 2.5 aktif'],
+    ['model_pro',            MODELS.pro,            '🧠 Gemini Pro 2.5 aktif'],
+    ['model_flash',          MODELS.flash,          '🔥 Gemini Flash 2.0 aktif'],
+    ['model_lite',           MODELS.lite,           '⚡ Gemini Lite aktif'],
+    ['model_groq_instant',   GROQ_MODELS.instant,   '⚡ Llama 8B aktif'],
+    ['model_groq_versatile', GROQ_MODELS.versatile, '🦙 Llama 70B aktif'],
+    ['model_groq_qwen',      GROQ_MODELS.qwen,      '🐉 Qwen3 32B aktif'],
   ];
   for (const [action, modelKey, label] of MODEL_ACTIONS) {
     bot.action(action, authMiddleware, async (ctx) => {
@@ -214,11 +203,14 @@ function registerHandlers(bot) {
       session.model = modelKey;
       saveSession(ctx.chat.id);
       await ctx.answerCbQuery(`✅ ${label}`);
-      await ctx.replyWithHTML(`<b>${label}</b>`);
+      await ctx.replyWithHTML(
+        `<b>${label}</b>`,
+        buildCommandPalette(session, isAdmin(ctx.from.id))
+      );
     });
   }
 
-  // ── Admin callbacks ───────────────────────────────────────────────────────────
+  // ── Admin callbacks ────────────────────────────────────────────────────────────
   bot.action('admin_panel', async (ctx) => {
     if (!adminGuard(ctx)) return;
     const session     = getSession(ctx.chat.id);
@@ -237,10 +229,9 @@ function registerHandlers(bot) {
     session.adminMode = false;
     saveSession(ctx.chat.id);
     await ctx.answerCbQuery('✅ Keluar dari admin mode');
-    await ctx.reply('Mode admin dinonaktifkan.', buildMainMenu(session, isAdmin(ctx.from.id)));
+    await ctx.reply('Mode admin dinonaktifkan.', buildCommandPalette(session, true));
   });
 
-  // ── Admin Status: sekarang async + DB + system health ─────────────────────────
   bot.action('admin_status', async (ctx) => {
     if (!adminGuard(ctx)) return;
     await ctx.answerCbQuery();
@@ -248,7 +239,7 @@ function registerHandlers(bot) {
       const txt = await buildStatusText();
       await ctx.replyWithHTML(txt, adminMiniMenu);
     } catch (err) {
-      await ctx.replyWithHTML(`❌ Error status: <code>${escapeHtml(err.message)}</code>`, adminMiniMenu);
+      await ctx.replyWithHTML(`❌ Error: <code>${escapeHtml(err.message)}</code>`, adminMiniMenu);
     }
   });
 
@@ -277,12 +268,12 @@ function registerHandlers(bot) {
     ].join('\n');
     const result = sanitizeForTelegram(sample);
     await ctx.replyWithHTML(
-      '<b>🧪 Test Sanitizer</b>\n\n<b>Input:</b>\n<pre><code>' + escapeHtml(sample) + '</code></pre>\n\n<b>Output:</b>\n' + result,
+      '<b>🧪 Test Sanitizer</b>\n\n<b>Input:</b>\n<pre><code>' +
+      escapeHtml(sample) + '</code></pre>\n\n<b>Output:</b>\n' + result,
       adminMiniMenu
     );
   });
 
-  // ── Deep Audit: sekarang gabungkan code + logs + health + DB ─────────────────
   bot.action('admin_diagnose', async (ctx) => {
     if (!adminGuard(ctx)) return;
     await ctx.answerCbQuery('🔍 Memulai deep audit...');
@@ -332,46 +323,19 @@ function registerHandlers(bot) {
 
     // ── Reply Keyboard interceptor ─────────────────────────────────────────────
     switch (userText) {
+      case REPLY_BTN.palette:
+        await ctx.reply('Perintah:', buildCommandPalette(session, adminFlag));
+        return;
+
       case REPLY_BTN.newChat:
         session.history = [];
         saveSession(chatId);
         await ctx.reply('✅ Chat baru dimulai. Silakan ketik pertanyaanmu.');
         return;
-
-      case REPLY_BTN.clearHist:
-        session.history = [];
-        saveSession(chatId);
-        await ctx.reply('🗑️ History percakapan dihapus.');
-        return;
-
-      case REPLY_BTN.mode:
-        await ctx.reply('Pilih mode:', modeMenu);
-        return;
-
-      case REPLY_BTN.model:
-        await ctx.reply('Pilih model:', modelMenu);
-        return;
-
-      case REPLY_BTN.info:
-        await ctx.replyWithHTML(buildInfoText(session), buildMainMenu(session, adminFlag));
-        return;
-
-      case REPLY_BTN.adminPanel:
-        if (!adminFlag) {
-          await ctx.reply('⛔ Akses ditolak.');
-          return;
-        }
-        session.adminMode = true;
-        saveSession(chatId);
-        await ctx.replyWithHTML(
-          `<b>🔐 Admin Panel</b>\n\nMode admin aktif. Ketik pertanyaan langsung untuk analisis kode, atau pilih aksi di bawah.\n\n<i>AI: ${ADMIN_MODEL}</i>`,
-          adminMenu
-        );
-        return;
     }
 
-    // Admin mode: route to code analyzer
-    if (session.adminMode && isAdmin(ctx.from.id)) {
+    // ── Admin mode: route to code analyzer ────────────────────────────────────
+    if (session.adminMode && adminFlag) {
       console.log(`\n[👑 ADMIN] ${ctx.from.first_name} (${chatId}): ${userText.slice(0, 80)}`);
       await ctx.sendChatAction('typing');
       const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
@@ -394,7 +358,7 @@ function registerHandlers(bot) {
       return;
     }
 
-    // Normal chat flow
+    // ── Normal chat flow ───────────────────────────────────────────────────────
     console.log(`\n[📥] ${ctx.from.first_name} (${chatId}): ${userText.slice(0, 80)}`);
     await ctx.sendChatAction('typing');
     const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);

@@ -4,8 +4,8 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const Groq = require('groq-sdk');
 
 const { GEMINI_KEY, GROQ_KEY, MODELS, GROQ_MODELS } = require('./config');
-const { SYSTEM_PROMPTS } = require('./prompts');
-const { getSession, saveSession } = require('./utils/session');
+const { ADAPTIVE_PROMPT }                            = require('./prompts');
+const { getSession, saveSession }                    = require('./utils/session');
 
 const genAI = new GoogleGenerativeAI(GEMINI_KEY);
 const groq  = GROQ_KEY ? new Groq({ apiKey: GROQ_KEY }) : null;
@@ -19,8 +19,8 @@ function isComplex(text) {
 }
 
 // ─── History Converter: Gemini → Groq (OpenAI format) ─────────────────────────
-function historyToGroq(history, systemPrompt) {
-  const messages = [{ role: 'system', content: systemPrompt }];
+function historyToGroq(history) {
+  const messages = [{ role: 'system', content: ADAPTIVE_PROMPT }];
   for (const msg of history.slice(-30)) {
     const textParts = msg.parts.filter(p => p.text);
     const hasMedia  = msg.parts.some(p => p.inlineData);
@@ -36,16 +36,15 @@ function historyToGroq(history, systemPrompt) {
 
 // ─── Gemini Ask ────────────────────────────────────────────────────────────────
 async function askWithGemini(chatId, userMessage, imageParts = [], modelCascade = []) {
-  const session      = getSession(chatId);
-  const systemPrompt = SYSTEM_PROMPTS[session.mode] || SYSTEM_PROMPTS.general;
-  const msgParts     = imageParts.length > 0
+  const session  = getSession(chatId);
+  const msgParts = imageParts.length > 0
     ? [...imageParts, { text: userMessage || 'Analisis konten ini.' }]
     : userMessage;
 
   let lastErr;
   for (const modelId of modelCascade) {
     try {
-      const model  = genAI.getGenerativeModel({ model: modelId, systemInstruction: systemPrompt });
+      const model  = genAI.getGenerativeModel({ model: modelId, systemInstruction: ADAPTIVE_PROMPT });
       const chat   = model.startChat({ history: session.history.slice(-30) });
       const result = await chat.sendMessage(msgParts);
       const text   = result.response.text();
@@ -80,9 +79,8 @@ async function askWithGemini(chatId, userMessage, imageParts = [], modelCascade 
 
 // ─── Groq Ask ─────────────────────────────────────────────────────────────────
 async function askWithGroq(chatId, userMessage, modelId) {
-  const session      = getSession(chatId);
-  const systemPrompt = SYSTEM_PROMPTS[session.mode] || SYSTEM_PROMPTS.general;
-  const messages     = historyToGroq(session.history, systemPrompt);
+  const session  = getSession(chatId);
+  const messages = historyToGroq(session.history);
   messages.push({ role: 'user', content: userMessage });
 
   const completion = await groq.chat.completions.create({
@@ -118,7 +116,6 @@ async function smartRequest(chatId, userMessage, imageParts = []) {
   const session = getSession(chatId);
   const groqOK  = !!groq;
   const msgLen  = userMessage.length;
-  const coding  = session.mode === 'coding';
   const complex = isComplex(userMessage);
 
   // Multimodal → always Gemini (Groq free tier: text only)
@@ -161,31 +158,19 @@ async function smartRequest(chatId, userMessage, imageParts = []) {
     }
   }
 
-  // Tier 3 — Coding mode or complex query
-  if (coding || complex) {
-    console.log(`[Omni-Router] ${coding ? 'Coding mode' : 'Complex query'} -> Tier 3: Gemini Flash 2.5`);
-    try {
-      return await askWithGemini(chatId, userMessage, [],
-        [MODELS.flash25, MODELS.flash, MODELS.lite]);
-    } catch (err) {
-      const isQuota = err.status === 429 || err.message?.includes('quota');
-      if (isQuota && groqOK) {
-        console.log('[Omni-Router] Gemini quota -> Tier 4: Groq Versatile');
-        return groqFallback(chatId, userMessage);
-      }
-      throw err;
-    }
+  // Tier 2/3 — Complex → Gemini Flash 2.5, else → Gemini Flash 2.5 (same tier, AI auto-adapts)
+  if (complex) {
+    console.log('[Omni-Router] Complex query -> Tier 3: Gemini Flash 2.5');
+  } else {
+    console.log('[Omni-Router] General query -> Tier 2: Gemini Flash 2.5');
   }
-
-  // Tier 2 — General → Gemini Flash 2.5
-  console.log('[Omni-Router] General query -> Tier 2: Gemini Flash 2.5');
   try {
     return await askWithGemini(chatId, userMessage, [],
       [MODELS.flash25, MODELS.flash, MODELS.lite]);
   } catch (err) {
     const isQuota = err.status === 429 || err.message?.includes('quota');
     if (isQuota && groqOK) {
-      console.log('[Omni-Router] Gemini Flash quota -> Tier 4: Groq Versatile');
+      console.log('[Omni-Router] Gemini quota -> Tier 4: Groq Versatile');
       return groqFallback(chatId, userMessage);
     }
     throw err;
