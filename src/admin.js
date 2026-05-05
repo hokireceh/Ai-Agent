@@ -161,11 +161,16 @@ const ADMIN_FILES = [
   'replit.md',
 ];
 
-function readProjectFiles(names = ADMIN_FILES) {
+// Chars per file untuk Full Audit — 1000 × 12 file ≈ 3000 token input
+const CHARS_PER_FILE = 1000;
+
+function readProjectFiles(names = ADMIN_FILES, charsPerFile = CHARS_PER_FILE) {
   return names.map(name => {
     try {
       const content = fs.readFileSync(path.join(PROJECT_ROOT, name), 'utf8');
-      return `=== ${name} (${content.length} chars) ===\n${content.slice(0, 5000)}\n`;
+      const snippet = content.slice(0, charsPerFile);
+      const truncated = content.length > charsPerFile ? ` [+${content.length - charsPerFile} chars truncated]` : '';
+      return `=== ${name}${truncated} ===\n${snippet}\n`;
     } catch {
       return `=== ${name} === [tidak ditemukan]\n`;
     }
@@ -196,10 +201,11 @@ DILARANG KERAS: <ul>, <ol>, <li>, <br>, <h1>-<h6>, markdown **, ##
 Untuk daftar: gunakan "- item" manual.`;
 
 // ─── analyzeCode: source code only ────────────────────────────────────────────
+// Budget: 12 file × 1000 chars = 12000 chars ≈ 3000 token → aman di bawah 6K TPM
 async function analyzeCode(question, files = ADMIN_FILES) {
   if (!groqAdmin) throw new Error('GROQ Admin tidak tersedia (set GROQ_ADMIN_API_KEY atau GROQ_API_KEY)');
 
-  const codeContent = readProjectFiles(files);
+  const codeContent = readProjectFiles(files, CHARS_PER_FILE);
   const completion  = await groqAdmin.chat.completions.create({
     model:       ADMIN_MODEL,
     messages: [
@@ -207,47 +213,47 @@ async function analyzeCode(question, files = ADMIN_FILES) {
       { role: 'user',   content: `Source code:\n\n${codeContent}\n\n---\nTugas: ${question}` },
     ],
     temperature: 0.2,
-    max_tokens:  8192,
+    max_tokens:  2048,
   });
 
   return completion.choices[0]?.message?.content || 'Tidak ada response dari AI.';
 }
 
 // ─── analyzeWithContext: code + logs + health + DB ────────────────────────────
+// Budget ketat: health ~200 + DB ~100 + logs ~500 + code ~1500 + question ~200
+// Total input ≈ 2500 token → output 2048 → total < 5000, aman di bawah 6K TPM
+const CONTEXT_FILES = ['src/router.js', 'src/handlers.js', 'src/admin.js', 'index.js'];
+
 async function analyzeWithContext(question) {
   if (!groqAdmin) throw new Error('GROQ Admin tidak tersedia');
 
-  const [pmResult, dbHealth] = await Promise.all([getPM2Logs(100), getDBHealth()]);
+  const [pmResult, dbHealth] = await Promise.all([getPM2Logs(50), getDBHealth()]);
   const health = getSystemHealth();
 
   const healthBlock = [
-    `Uptime bot   : ${health.uptimeFormatted}`,
-    `Heap used    : ${health.heapUsedMB} MB / ${health.heapTotalMB} MB`,
-    `RSS          : ${health.rssMB} MB`,
-    `System RAM   : ${health.systemRamUsedMB} MB / ${health.systemRamTotalMB} MB (${health.ramUsedPct}%)`,
-    `CPU load avg : ${health.loadAvg1m} (1m) | ${health.loadAvg5m} (5m) | ${health.loadAvg15m} (15m)`,
-    `CPU cores    : ${health.cpuCount}`,
-    `Node.js      : ${health.nodeVersion}`,
-    `Environment  : ${health.env}`,
-    health.extendedReport ? `OS uptime    : ${health.osUptime}` : '',
-    health.extendedReport ? `Hostname     : ${health.hostname}` : '',
-    health.extendedReport ? `CPU status   : ${health.loadWarning}` : '',
-    health.extendedReport ? `RAM status   : ${health.ramWarning}` : '',
+    `Uptime: ${health.uptimeFormatted} | Heap: ${health.heapUsedMB}/${health.heapTotalMB}MB`,
+    `RAM: ${health.systemRamUsedMB}/${health.systemRamTotalMB}MB (${health.ramUsedPct}%) | RSS: ${health.rssMB}MB`,
+    `CPU load: ${health.loadAvg1m} (1m) ${health.loadAvg5m} (5m) | Cores: ${health.cpuCount}`,
+    `Node: ${health.nodeVersion} | Env: ${health.env}`,
+    health.extendedReport ? `Host: ${health.hostname} | OS up: ${health.osUptime} | CPU: ${health.loadWarning} | RAM: ${health.ramWarning}` : '',
   ].filter(Boolean).join('\n');
 
   const dbBlock = dbHealth.status === 'OK'
-    ? `Status: OK | Latency: ${dbHealth.latencyMs}ms | Sessions total: ${dbHealth.totalSessions} | Aktif: ${dbHealth.activeSessions} | In-memory: ${dbHealth.inMemory}`
-    : `Status: ERROR | ${dbHealth.error}`;
+    ? `OK | ${dbHealth.latencyMs}ms | total: ${dbHealth.totalSessions} | aktif: ${dbHealth.activeSessions}`
+    : `ERROR: ${dbHealth.error}`;
 
-  const logBlock = `Sumber: ${pmResult.source}\n\n${pmResult.logs}`;
-  const codeContent = readProjectFiles();
+  // Log: ambil 50 baris, potong di 2000 chars
+  const logBlock = `[${pmResult.source}]\n${pmResult.logs.slice(-2000)}`;
+
+  // Kode: hanya file kunci, 600 chars per file
+  const codeContent = readProjectFiles(CONTEXT_FILES, 600);
 
   const userContent = [
-    `=== SYSTEM HEALTH ===\n${healthBlock}`,
-    `=== NEONDB HEALTH ===\n${dbBlock}`,
-    `=== PM2 / RUNTIME LOGS (100 baris terakhir) ===\n${logBlock}`,
-    `=== SOURCE CODE ===\n${codeContent.slice(0, 12000)}`,
-    `---\nTugas/pertanyaan: ${question}`,
+    `[HEALTH]\n${healthBlock}`,
+    `[DB] ${dbBlock}`,
+    `[LOGS]\n${logBlock}`,
+    `[CODE]\n${codeContent}`,
+    `[TUGAS] ${question}`,
   ].join('\n\n');
 
   const completion = await groqAdmin.chat.completions.create({
@@ -257,7 +263,7 @@ async function analyzeWithContext(question) {
       { role: 'user',   content: userContent },
     ],
     temperature: 0.2,
-    max_tokens:  8192,
+    max_tokens:  2048,
   });
 
   return completion.choices[0]?.message?.content || 'Tidak ada response dari AI.';
