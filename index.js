@@ -1,8 +1,8 @@
 require('dotenv').config();
 const { Telegraf } = require('telegraf');
 
-const { BOT_TOKEN, MODELS, GROQ_MODELS } = require('./src/config');
-const { groq }                           = require('./src/router');
+const { BOT_TOKEN, MODELS, GROQ_MODELS, GROQ_ALL_KEYS } = require('./src/config');
+const { groq }                                          = require('./src/router');
 const { initSessions, saveSessions }     = require('./src/utils/session');
 const { registerHandlers }               = require('./src/handlers');
 const { initScheduler }                  = require('./src/scheduler');
@@ -18,7 +18,8 @@ const { initScheduler }                  = require('./src/scheduler');
 
   console.log('🤖 Bot aktif — Mode: Polling | Storage: NeonDB');
   console.log(`📦 Gemini: ${MODELS.flash25} | ${MODELS.pro} | ${MODELS.flash} | ${MODELS.lite}`);
-  console.log(`📦 Groq  : ${groq ? `${GROQ_MODELS.instant} | ${GROQ_MODELS.versatile} | ${GROQ_MODELS.qwen}` : 'DISABLED (no GROQ_API_KEY)'}`);
+  const groqKeys = GROQ_ALL_KEYS.length;
+  console.log(`📦 Groq  : ${groqKeys > 0 ? `${GROQ_MODELS.instant} | ${GROQ_MODELS.versatile} | ${GROQ_MODELS.qwen} [${groqKeys} key${groqKeys > 1 ? ` — ${groqKeys}× TPM` : ''}]` : 'DISABLED (no GROQ_API_KEY)'}`);
 
   process.once('SIGINT',  () => { saveSessions(); bot.stop('SIGINT'); });
   process.once('SIGTERM', () => { saveSessions(); bot.stop('SIGTERM'); });

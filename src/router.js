@@ -3,12 +3,36 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const Groq = require('groq-sdk');
 
-const { GEMINI_KEY, GROQ_KEY, MODELS, GROQ_MODELS } = require('./config');
-const { ADAPTIVE_PROMPT }                            = require('./prompts');
-const { getSession, saveSession }                    = require('./utils/session');
+const { GEMINI_KEY, GROQ_ALL_KEYS, MODELS, GROQ_MODELS } = require('./config');
+const { ADAPTIVE_PROMPT }                                 = require('./prompts');
+const { getSession, saveSession }                         = require('./utils/session');
 
 const genAI = new GoogleGenerativeAI(GEMINI_KEY);
-const groq  = GROQ_KEY ? new Groq({ apiKey: GROQ_KEY }) : null;
+
+// ─── Multi-key Groq Pool ───────────────────────────────────────────────────────
+const groqPool  = GROQ_ALL_KEYS.map(key => new Groq({ apiKey: key }));
+let   poolIndex = 0;
+const groq      = groqPool[0] ?? null; // legacy ref — dipakai cek groqOK
+
+async function groqCreate(params) {
+  if (groqPool.length === 0) throw new Error('Tidak ada GROQ_API_KEY');
+  let lastErr;
+  for (let i = 0; i < groqPool.length; i++) {
+    const idx    = (poolIndex + i) % groqPool.length;
+    const client = groqPool[idx];
+    try {
+      const res = await client.chat.completions.create(params);
+      poolIndex  = (idx + 1) % groqPool.length;
+      return res;
+    } catch (err) {
+      lastErr = err;
+      const isRateLimit = err.status === 429 || err.message?.includes('rate_limit');
+      if (!isRateLimit || groqPool.length === 1) throw err;
+      console.warn(`[Omni-Router] Groq key #${idx} rate limited, coba key berikutnya...`);
+    }
+  }
+  throw lastErr;
+}
 
 // ─── Complexity Detector ───────────────────────────────────────────────────────
 function isComplex(text) {
@@ -83,7 +107,7 @@ async function askWithGroq(chatId, userMessage, modelId) {
   const messages = historyToGroq(session.history);
   messages.push({ role: 'user', content: userMessage });
 
-  const completion = await groq.chat.completions.create({
+  const completion = await groqCreate({
     model:       modelId,
     messages,
     temperature: 0.7,

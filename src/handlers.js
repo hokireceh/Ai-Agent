@@ -88,13 +88,13 @@ async function buildStatusText() {
   } else {
     lines.push(`- Status: <code>ERROR</code> — <code>${escapeHtml(db.error ?? '')}</code>`);
   }
+  const keyCount = groqPool.length;
+  const keyInfo  = keyCount === 0 ? 'tidak tersedia'
+    : keyCount === 1 ? '1 key'
+    : `${keyCount} key — ${keyCount}× kapasitas`;
   lines.push('', `<b>Gemini primary:</b> <code>${MODELS.flash25}</code>`);
-  lines.push(`<b>Groq fallback:</b> <code>${GROQ_MODELS.versatile}</code>`);
-  lines.push(`<b>Admin AI:</b> <code>${ADMIN_MODEL}</code>`);
-  const poolInfo = groqPool.length === 0 ? 'tidak tersedia'
-    : groqPool.length === 1 ? 'aktif (1 key)'
-    : `aktif (${groqPool.length} key — ${groqPool.length}× kapasitas)`;
-  lines.push(`<b>Groq Admin:</b> <code>${poolInfo}</code>`);
+  lines.push(`<b>Groq (chat + admin):</b> <code>${keyInfo}</code>`);
+  lines.push(`<b>Admin AI model:</b> <code>${ADMIN_MODEL}</code>`);
 
   return lines.join('\n');
 }
