@@ -35,13 +35,13 @@ const miniMenu = Markup.inlineKeyboard([
 ]);
 
 const adminMenu = Markup.inlineKeyboard([
-  [Markup.button.callback('🔍 Diagnosa Kode', 'admin_diagnose'), Markup.button.callback('📋 Full Audit', 'admin_audit')],
+  [Markup.button.callback('🔍 Deep Audit', 'admin_diagnose'), Markup.button.callback('📋 Full Audit', 'admin_audit')],
   [Markup.button.callback('📊 System Status', 'admin_status'), Markup.button.callback('🧹 Reset Semua Session', 'admin_reset_all')],
   [Markup.button.callback('🧪 Test Sanitizer', 'admin_test'), Markup.button.callback('❌ Keluar Admin', 'admin_exit')],
 ]);
 
 const adminMiniMenu = Markup.inlineKeyboard([
-  [Markup.button.callback('🔍 Diagnosa', 'admin_diagnose'), Markup.button.callback('📋 Audit', 'admin_audit')],
+  [Markup.button.callback('🔍 Deep Audit', 'admin_diagnose'), Markup.button.callback('📋 Full Audit', 'admin_audit')],
   [Markup.button.callback('🏠 Admin Panel', 'admin_panel'), Markup.button.callback('❌ Keluar', 'admin_exit')],
 ]);
 
