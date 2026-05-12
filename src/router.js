@@ -69,7 +69,11 @@ async function askWithGemini(chatId, userMessage, imageParts = [], modelCascade 
   let lastErr;
   for (const modelId of modelCascade) {
     try {
-      const model  = genAI.getGenerativeModel({ model: modelId, systemInstruction: ADAPTIVE_PROMPT });
+      const model  = genAI.getGenerativeModel({
+        model:             modelId,
+        systemInstruction: ADAPTIVE_PROMPT,
+        generationConfig:  { maxOutputTokens: 1024 },
+      });
       const chat   = model.startChat({ history: session.history.slice(-30) });
       const result = await chat.sendMessage(msgParts);
       const text   = result.response.text();
@@ -124,7 +128,7 @@ async function askWithGroq(chatId, userMessage, modelId) {
         model:       modelId,
         messages,
         temperature: 0.7,
-        max_tokens:  4096,
+        max_tokens:  1024,
       });
 
       const text = completion.choices[0]?.message?.content || '';
