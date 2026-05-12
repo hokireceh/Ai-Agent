@@ -5,6 +5,7 @@ const BOT_TOKEN      = process.env.TELEGRAM_BOT_TOKEN;
 const GEMINI_KEY     = process.env.GEMINI_API_KEY;
 const GROQ_KEY       = process.env.GROQ_API_KEY;
 const GROQ_ADMIN_KEY = process.env.GROQ_ADMIN_API_KEY || GROQ_KEY;
+const SURF_KEY       = process.env.SURF_API_KEY || null;
 
 // Pool semua key unik — gabungkan GROQ_API_KEY + GROQ_ADMIN_API_KEY
 // Duplikat dibuang otomatis, jadi aman meski pakai key yang sama
@@ -71,6 +72,7 @@ module.exports = {
   GROQ_ADMIN_KEY,
   GROQ_ALL_KEYS,
   GROQ_ADMIN_KEYS,
+  SURF_KEY,
   ALLOWED_USERS,
   ADMIN_USERS,
   MODELS,

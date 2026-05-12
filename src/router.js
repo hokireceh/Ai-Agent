@@ -6,6 +6,7 @@ const Groq = require('groq-sdk');
 const { GEMINI_KEY, GROQ_ALL_KEYS, MODELS, GROQ_MODELS } = require('./config');
 const { ADAPTIVE_PROMPT }                                 = require('./prompts');
 const { getSession, saveSession }                         = require('./utils/session');
+const { isCrypto, fetchCryptoContext }                    = require('./surf');
 
 const genAI = new GoogleGenerativeAI(GEMINI_KEY);
 
@@ -103,25 +104,52 @@ async function askWithGemini(chatId, userMessage, imageParts = [], modelCascade 
 
 // ─── Groq Ask ─────────────────────────────────────────────────────────────────
 async function askWithGroq(chatId, userMessage, modelId) {
-  const session  = getSession(chatId);
-  const messages = historyToGroq(session.history);
-  messages.push({ role: 'user', content: userMessage });
+  const session = getSession(chatId);
 
-  const completion = await groqCreate({
-    model:       modelId,
-    messages,
-    temperature: 0.7,
-    max_tokens:  4096,
-  });
+  // Adaptive history trimming — mulai dari full history, trim bertahap jika 413
+  const historySlices = [
+    session.history.slice(-30), // full cap
+    session.history.slice(-10), // trim berat
+    session.history.slice(-4),  // last 2 exchanges only
+    [],                         // fresh context
+  ];
 
-  const text = completion.choices[0]?.message?.content || '';
+  let lastErr;
+  for (const historySlice of historySlices) {
+    try {
+      const messages = historyToGroq(historySlice);
+      messages.push({ role: 'user', content: userMessage });
 
-  session.history.push({ role: 'user',  parts: [{ text: userMessage }] });
-  session.history.push({ role: 'model', parts: [{ text }] });
-  if (session.history.length > 40) session.history = session.history.slice(-40);
-  saveSession(chatId);
+      const completion = await groqCreate({
+        model:       modelId,
+        messages,
+        temperature: 0.7,
+        max_tokens:  4096,
+      });
 
-  return { text, usedModel: modelId, provider: 'groq' };
+      const text = completion.choices[0]?.message?.content || '';
+
+      if (historySlice.length < session.history.slice(-30).length) {
+        console.warn(`[Omni-Router] Groq history trimmed to ${historySlice.length} entries (token limit hit)`);
+      }
+
+      session.history.push({ role: 'user',  parts: [{ text: userMessage }] });
+      session.history.push({ role: 'model', parts: [{ text }] });
+      if (session.history.length > 40) session.history = session.history.slice(-40);
+      saveSession(chatId);
+
+      return { text, usedModel: modelId, provider: 'groq' };
+
+    } catch (err) {
+      lastErr = err;
+      const isTooLarge = err.status === 413
+        || err.message?.includes('Request too large')
+        || err.message?.includes('tokens per minute');
+      if (!isTooLarge) throw err; // error lain langsung throw
+      // 413 → coba slice berikutnya
+    }
+  }
+  throw lastErr;
 }
 
 // ─── Groq Tier 4 Fallback Chain ───────────────────────────────────────────────
@@ -142,6 +170,18 @@ async function smartRequest(chatId, userMessage, imageParts = []) {
   const msgLen  = userMessage.length;
   const complex = isComplex(userMessage);
 
+  // ── Surf Context Injection ─────────────────────────────────────────────────
+  // Jika query crypto-related, fetch live data dari Surf API dan inject ke prompt
+  // Non-blocking: kalau Surf gagal/timeout, lanjut normal tanpa context
+  let enrichedMessage = userMessage;
+  if (imageParts.length === 0 && isCrypto(userMessage)) {
+    const ctx = await fetchCryptoContext(userMessage);
+    if (ctx) {
+      enrichedMessage = `${ctx}\n\n---\nPertanyaan user: ${userMessage}`;
+      console.log('[Surf] Context injected — live crypto data attached');
+    }
+  }
+
   // Multimodal → always Gemini (Groq free tier: text only)
   if (imageParts.length > 0) {
     console.log('[Omni-Router] Multimodal detected -> Gemini only');
@@ -155,14 +195,14 @@ async function smartRequest(chatId, userMessage, imageParts = []) {
 
     if (isGroqModel && groqOK) {
       console.log(`[Omni-Router] User model (Groq) -> ${session.model}`);
-      return askWithGroq(chatId, userMessage, session.model);
+      return askWithGroq(chatId, enrichedMessage, session.model);
     }
 
     const chosenModel   = session.model;
     const geminiCascade = [chosenModel, MODELS.flash25, MODELS.flash, MODELS.lite]
       .filter((v, i, a) => a.indexOf(v) === i);
     try {
-      const result = await askWithGemini(chatId, userMessage, [], geminiCascade);
+      const result = await askWithGemini(chatId, enrichedMessage, [], geminiCascade);
       // Auto-reset model ke 'auto' jika model pilihan user sudah tidak valid (404)
       if (result.usedModel !== chosenModel && !Object.values(MODELS).includes(chosenModel)) {
         console.warn(`[Omni-Router] Model pilihan '${chosenModel}' tidak valid, auto-reset ke 'auto'`);
@@ -174,36 +214,37 @@ async function smartRequest(chatId, userMessage, imageParts = []) {
       const isQuota = err.status === 429 || err.message?.includes('quota');
       if (isQuota && groqOK) {
         console.log('[Omni-Router] User model quota hit -> Tier 4 Groq fallback');
-        return groqFallback(chatId, userMessage);
+        return groqFallback(chatId, enrichedMessage);
       }
       throw err;
     }
   }
 
   // Tier 1 — Short/instant → Groq Llama 8B
-  if (groqOK && msgLen < 40) {
+  // Skip Tier 1 jika ada surf context — Llama 8B kurang mampu mengolah context panjang
+  if (groqOK && msgLen < 40 && enrichedMessage === userMessage) {
     console.log(`[Omni-Router] Short query (${msgLen} chars) -> Tier 1: Llama 8B (Groq)`);
     try {
-      return await askWithGroq(chatId, userMessage, GROQ_MODELS.instant);
+      return await askWithGroq(chatId, enrichedMessage, GROQ_MODELS.instant);
     } catch {
       console.warn('[Omni-Router] Tier 1 failed, cascading to Tier 2...');
     }
   }
 
-  // Tier 2/3 — Complex → Gemini Flash 2.5, else → Gemini Flash 2.5 (same tier, AI auto-adapts)
-  if (complex) {
-    console.log('[Omni-Router] Complex query -> Tier 3: Gemini Flash 2.5');
+  // Tier 2/3 — Gemini Flash 2.5 (AI auto-adapts based on context)
+  if (complex || enrichedMessage !== userMessage) {
+    console.log('[Omni-Router] Complex/enriched query -> Tier 2/3: Gemini Flash 2.5');
   } else {
     console.log('[Omni-Router] General query -> Tier 2: Gemini Flash 2.5');
   }
   try {
-    return await askWithGemini(chatId, userMessage, [],
+    return await askWithGemini(chatId, enrichedMessage, [],
       [MODELS.flash25, MODELS.flash, MODELS.lite]);
   } catch (err) {
     const isQuota = err.status === 429 || err.message?.includes('quota');
     if (isQuota && groqOK) {
       console.log('[Omni-Router] Gemini quota -> Tier 4: Groq Versatile');
-      return groqFallback(chatId, userMessage);
+      return groqFallback(chatId, enrichedMessage);
     }
     throw err;
   }
