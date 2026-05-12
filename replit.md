@@ -98,3 +98,8 @@ docs/
 
 Semua keputusan model ID, routing, dan prompt rules ada di `docs/prompt-audit.md`.
 Jangan ubah model ID tanpa memverifikasi ke docs resmi / live API terlebih dahulu.
+
+## User Preferences
+
+- **Gaya komunikasi:** Casual tapi teknikal. Campur Bahasa Indonesia dan Jawa. Langsung ke poin, tidak perlu basa-basi panjang.
+- **Kode:** Langsung tampilkan solusinya, no preamble panjang.
