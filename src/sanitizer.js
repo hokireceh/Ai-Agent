@@ -1,15 +1,14 @@
 'use strict';
 
 // Sanitize AI response → safe Telegram HTML
-// Pipeline: strip think blocks → markdown → illegal-tag conversion → strip → escape → restore valid tags
 function sanitizeForTelegram(raw = '') {
   let text = raw;
 
-  // 0. Strip Qwen3 <think>...</think> reasoning blocks (always hidden from user)
+  // 0. Strip Qwen3 <think>...</think> blocks
   text = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 
-  // 1. Markdown triple-backtick → <pre><code> (escape content inside)
-  text = text.replace(/```[\w]*\n?([\s\S]*?)```/g, (_, code) => {
+  // 1. Triple-backtick code blocks → <pre><code>
+  text = text.replace(/```[\w-]*\n?([\s\S]*?)```/g, (_, code) => {
     const safe = code.trim()
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
@@ -17,7 +16,7 @@ function sanitizeForTelegram(raw = '') {
     return `<pre><code>${safe}</code></pre>`;
   });
 
-  // 2. Inline backtick → <code> (escape content inside)
+  // 2. Inline backtick → <code>
   text = text.replace(/`([^`\n]+)`/g, (_, code) => {
     const safe = code
       .replace(/&/g, '&amp;')
@@ -26,26 +25,35 @@ function sanitizeForTelegram(raw = '') {
     return `<code>${safe}</code>`;
   });
 
-  // 3. Markdown headings → <b> (##, ###, #### → bold)
-  text = text.replace(/^#{1,6}\s+(.+)$/gm, (_, content) => `<b>${content.trim()}</b>`);
+  // 3. Markdown headings → <b>
+  text = text.replace(/^#{1,6}\s+(.+)$/gm, (_, c) => `<b>${c.trim()}</b>`);
 
-  // 4. Markdown bold **text** or __text__ → <b>
-  text = text.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
-  text = text.replace(/__(.+?)__/g, '<b>$1</b>');
+  // 4. **bold** / __bold__ → <b> (sebelum italic, biar tidak bentrok)
+  text = text.replace(/\*\*(.+?)\*\*/gs, '<b>$1</b>');
+  text = text.replace(/__(.+?)__/gs, '<b>$1</b>');
 
-  // 5. Markdown italic *text* or _text_ → <i> (single star/underscore, not double)
-  text = text.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<i>$1</i>');
-  text = text.replace(/(?<!_)_(?!_)(.+?)(?<!_)_(?!_)/g, '<i>$1</i>');
+  // 5. *italic* → <i> — hati-hati: hanya single star, tidak di awal list item
+  //    Underscore italic DIHAPUS — terlalu berbahaya untuk snake_case dan variabel teknikal
+  text = text.replace(/(?<!\*)\*(?!\*)(?!\s)(.+?)(?<!\s)\*(?!\*)/g, '<i>$1</i>');
 
-  // 6. Protect valid Telegram tags with placeholders
+  // 6. Markdown horizontal rule → hapus (jadi visual noise)
+  text = text.replace(/^(-{3,}|_{3,}|\*{3,})$/gm, '');
+
+  // 7. Blockquote > ... → strip prefix, biarkan teksnya
+  text = text.replace(/^>\s?(.*)$/gm, '$1');
+
+  // 8. Numbered list "1. Item" → "- Item" (normalize)
+  text = text.replace(/^\d+\.\s+/gm, '- ');
+
+  // 9. Protect valid Telegram HTML tags dengan placeholder
   const saved = [];
-  const VALID = /(<\/?(b|i|s|u|code|pre|a)(?:\s[^>]*)?>)/gi;
+  const VALID  = /(<\/?(b|i|s|u|code|pre|a)(?:\s[^>]*)?>)/gi;
   text = text.replace(VALID, (match) => {
     saved.push(match);
     return `\x00${saved.length - 1}\x00`;
   });
 
-  // 7. Convert illegal HTML tags to plain-text equivalents
+  // 10. Convert illegal tags → plain text
   text = text.replace(/<br\s*\/?>/gi, '\n');
   text = text.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (_, c) =>
     '- ' + c.replace(/<[^>]*>/g, '').trim() + '\n'
@@ -54,19 +62,22 @@ function sanitizeForTelegram(raw = '') {
   text = text.replace(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi, (_, c) =>
     '<b>' + c.replace(/<[^>]*>/g, '').trim() + '</b>\n'
   );
+  text = text.replace(/<p[^>]*>([\s\S]*?)<\/p>/gi, '$1\n');
+  text = text.replace(/<\/?(?:div|span|section|article|header|footer)[^>]*>/gi, '');
+  text = text.replace(/<hr\s*\/?>/gi, '');
 
-  // 8. Strip any remaining unknown tags
+  // 11. Strip remaining unknown tags
   text = text.replace(/<[^>]+>/g, '');
 
-  // 9. Escape bare & < > that survived (not inside placeholders)
+  // 12. Escape bare & < > (bukan di dalam placeholder)
   text = text.replace(/&(?!amp;|lt;|gt;|quot;|#\d+;|#x[\da-f]+;)/gi, '&amp;');
   text = text.replace(/</g, '&lt;');
   text = text.replace(/>/g, '&gt;');
 
-  // 10. Restore valid tags
+  // 13. Restore valid tags
   text = text.replace(/\x00(\d+)\x00/g, (_, i) => saved[+i]);
 
-  // 11. Collapse 3+ consecutive blank lines → 2
+  // 14. Collapse 3+ blank lines → 2
   text = text.replace(/\n{3,}/g, '\n\n');
 
   return text.trim();

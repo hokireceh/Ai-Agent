@@ -60,8 +60,11 @@ function historyToGroq(history) {
 }
 
 // ─── Gemini Ask ────────────────────────────────────────────────────────────────
-async function askWithGemini(chatId, userMessage, imageParts = [], modelCascade = []) {
+// saveMessage: pesan yang disimpan ke history (default = userMessage)
+// Dipakai saat enrichedMessage dikirim ke AI tapi original yang mau disimpan
+async function askWithGemini(chatId, userMessage, imageParts = [], modelCascade = [], saveMessage = null) {
   const session  = getSession(chatId);
+  const histMsg  = saveMessage ?? userMessage;
   const msgParts = imageParts.length > 0
     ? [...imageParts, { text: userMessage || 'Analisis konten ini.' }]
     : userMessage;
@@ -79,8 +82,8 @@ async function askWithGemini(chatId, userMessage, imageParts = [], modelCascade 
       const text   = result.response.text();
 
       const userPart = imageParts.length > 0
-        ? { role: 'user', parts: [...imageParts, { text: userMessage || 'Analisis konten ini.' }] }
-        : { role: 'user', parts: [{ text: userMessage }] };
+        ? { role: 'user', parts: [...imageParts, { text: histMsg || 'Analisis konten ini.' }] }
+        : { role: 'user', parts: [{ text: histMsg }] };
       session.history.push(userPart);
       session.history.push({ role: 'model', parts: [{ text }] });
       if (session.history.length > 40) session.history = session.history.slice(-40);
@@ -107,8 +110,9 @@ async function askWithGemini(chatId, userMessage, imageParts = [], modelCascade 
 }
 
 // ─── Groq Ask ─────────────────────────────────────────────────────────────────
-async function askWithGroq(chatId, userMessage, modelId) {
+async function askWithGroq(chatId, userMessage, modelId, saveMessage = null) {
   const session = getSession(chatId);
+  const histMsg = saveMessage ?? userMessage;
 
   // Adaptive history trimming — mulai dari full history, trim bertahap jika 413
   const historySlices = [
@@ -137,7 +141,7 @@ async function askWithGroq(chatId, userMessage, modelId) {
         console.warn(`[Omni-Router] Groq history trimmed to ${historySlice.length} entries (token limit hit)`);
       }
 
-      session.history.push({ role: 'user',  parts: [{ text: userMessage }] });
+      session.history.push({ role: 'user',  parts: [{ text: histMsg }] });
       session.history.push({ role: 'model', parts: [{ text }] });
       if (session.history.length > 40) session.history = session.history.slice(-40);
       saveSession(chatId);
@@ -157,13 +161,13 @@ async function askWithGroq(chatId, userMessage, modelId) {
 }
 
 // ─── Groq Tier 4 Fallback Chain ───────────────────────────────────────────────
-async function groqFallback(chatId, userMessage) {
+async function groqFallback(chatId, userMessage, saveMessage = null) {
   try {
     console.log(`[Omni-Router] Tier 4: Groq Versatile (${GROQ_MODELS.versatile})`);
-    return await askWithGroq(chatId, userMessage, GROQ_MODELS.versatile);
+    return await askWithGroq(chatId, userMessage, GROQ_MODELS.versatile, saveMessage);
   } catch {
     console.warn('[Omni-Router] Tier 4 Versatile failed, trying Qwen...');
-    return await askWithGroq(chatId, userMessage, GROQ_MODELS.qwen);
+    return await askWithGroq(chatId, userMessage, GROQ_MODELS.qwen, saveMessage);
   }
 }
 
@@ -199,14 +203,14 @@ async function smartRequest(chatId, userMessage, imageParts = []) {
 
     if (isGroqModel && groqOK) {
       console.log(`[Omni-Router] User model (Groq) -> ${session.model}`);
-      return askWithGroq(chatId, enrichedMessage, session.model);
+      return askWithGroq(chatId, enrichedMessage, session.model, userMessage);
     }
 
     const chosenModel   = session.model;
     const geminiCascade = [chosenModel, MODELS.flash25, MODELS.flash, MODELS.lite]
       .filter((v, i, a) => a.indexOf(v) === i);
     try {
-      const result = await askWithGemini(chatId, enrichedMessage, [], geminiCascade);
+      const result = await askWithGemini(chatId, enrichedMessage, [], geminiCascade, userMessage);
       // Auto-reset model ke 'auto' jika model pilihan user sudah tidak valid (404)
       if (result.usedModel !== chosenModel && !Object.values(MODELS).includes(chosenModel)) {
         console.warn(`[Omni-Router] Model pilihan '${chosenModel}' tidak valid, auto-reset ke 'auto'`);
@@ -218,7 +222,7 @@ async function smartRequest(chatId, userMessage, imageParts = []) {
       const isQuota = err.status === 429 || err.message?.includes('quota');
       if (isQuota && groqOK) {
         console.log('[Omni-Router] User model quota hit -> Tier 4 Groq fallback');
-        return groqFallback(chatId, enrichedMessage);
+        return groqFallback(chatId, enrichedMessage, userMessage);
       }
       throw err;
     }
@@ -229,7 +233,7 @@ async function smartRequest(chatId, userMessage, imageParts = []) {
   if (groqOK && msgLen < 40 && enrichedMessage === userMessage) {
     console.log(`[Omni-Router] Short query (${msgLen} chars) -> Tier 1: Llama 8B (Groq)`);
     try {
-      return await askWithGroq(chatId, enrichedMessage, GROQ_MODELS.instant);
+      return await askWithGroq(chatId, enrichedMessage, GROQ_MODELS.instant, userMessage);
     } catch {
       console.warn('[Omni-Router] Tier 1 failed, cascading to Tier 2...');
     }
@@ -243,12 +247,12 @@ async function smartRequest(chatId, userMessage, imageParts = []) {
   }
   try {
     return await askWithGemini(chatId, enrichedMessage, [],
-      [MODELS.flash25, MODELS.flash, MODELS.lite]);
+      [MODELS.flash25, MODELS.flash, MODELS.lite], userMessage);
   } catch (err) {
     const isQuota = err.status === 429 || err.message?.includes('quota');
     if (isQuota && groqOK) {
       console.log('[Omni-Router] Gemini quota -> Tier 4: Groq Versatile');
-      return groqFallback(chatId, enrichedMessage);
+      return groqFallback(chatId, enrichedMessage, userMessage);
     }
     throw err;
   }
