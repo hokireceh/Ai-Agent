@@ -255,3 +255,4 @@ Input raw AI text
 | 2026-05-04 | v1: Fix `gemini-1.5-flash` 404. Tambah: cascade, 4 mode, multimodal, persistent session.                                   |
 | 2026-05-04 | v2: Integrasikan Groq SDK. Refactor ke `smartRequest` Omni-Router 4-tier. Tambah: 3 Groq model, historyToGroq converter.   |
 | 2026-05-05 | v3: Hapus mode system → single ADAPTIVE_PROMPT. NeonDB replace sessions.json. Multi-key Groq pool (GROQ_ALL_KEYS). Sanitizer 11-step pipeline. `gemini-2.5-pro` keluar dari auto cascade. |
+| 2026-05-12 | v4: ADAPTIVE_PROMPT diperkuat dengan expertise crypto trading & airdrop. Auto-reset `session.model` ke `'auto'` jika model pilihan user sudah 404/invalid. Surf skill diinstall (`AGENTS.md` routing). |

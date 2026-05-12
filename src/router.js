@@ -158,10 +158,18 @@ async function smartRequest(chatId, userMessage, imageParts = []) {
       return askWithGroq(chatId, userMessage, session.model);
     }
 
-    const geminiCascade = [session.model, MODELS.flash25, MODELS.flash, MODELS.lite]
+    const chosenModel   = session.model;
+    const geminiCascade = [chosenModel, MODELS.flash25, MODELS.flash, MODELS.lite]
       .filter((v, i, a) => a.indexOf(v) === i);
     try {
-      return await askWithGemini(chatId, userMessage, [], geminiCascade);
+      const result = await askWithGemini(chatId, userMessage, [], geminiCascade);
+      // Auto-reset model ke 'auto' jika model pilihan user sudah tidak valid (404)
+      if (result.usedModel !== chosenModel && !Object.values(MODELS).includes(chosenModel)) {
+        console.warn(`[Omni-Router] Model pilihan '${chosenModel}' tidak valid, auto-reset ke 'auto'`);
+        session.model = 'auto';
+        saveSession(chatId);
+      }
+      return result;
     } catch (err) {
       const isQuota = err.status === 429 || err.message?.includes('quota');
       if (isQuota && groqOK) {
