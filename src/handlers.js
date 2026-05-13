@@ -4,6 +4,7 @@ const { ALLOWED_USERS, ADMIN_USERS, MODELS, GROQ_MODELS, MODEL_LABELS } = requir
 const { sessions, getSession, saveSession, saveSessions }                = require('./utils/session');
 const { groq, smartRequest, askWithGemini }                              = require('./router');
 const { sanitizeForTelegram, escapeHtml, downloadAsBase64, sendLong }    = require('./sanitizer');
+const { runShell, formatShellOutput }                                    = require('./utils/shell');
 const {
   groqAdmin, groqPool, ADMIN_MODEL, isAdmin,
   analyzeWithContext,
@@ -326,8 +327,35 @@ function registerHandlers(bot) {
         return;
     }
 
-    // ── Admin mode: route to code analyzer ────────────────────────────────────
+    // ── Admin mode ─────────────────────────────────────────────────────────────
     if (session.adminMode && adminFlag) {
+
+      // ── Shell execution: prefix "$ " ──────────────────────────────────────
+      if (userText.startsWith('$ ')) {
+        const command = userText.slice(2).trim();
+        console.log(`\n[🖥️ SHELL] ${ctx.from.first_name}: ${command}`);
+        await ctx.sendChatAction('typing');
+        const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
+        try {
+          const result = await runShell(command);
+          clearInterval(typingInterval);
+          const output = formatShellOutput({ ...result, command });
+          console.log(`[🖥️ SHELL] exit=${result.code} | ${command.slice(0, 40)}`);
+          await sendLong(ctx, output, {
+            reply_parameters: { message_id: ctx.message.message_id },
+            ...adminMiniMenu,
+          });
+        } catch (err) {
+          clearInterval(typingInterval);
+          await ctx.replyWithHTML(
+            `❌ Shell error: <code>${escapeHtml(err.message?.slice(0, 120))}</code>`,
+            adminMiniMenu
+          );
+        }
+        return;
+      }
+
+      // ── AI code analyzer ──────────────────────────────────────────────────
       console.log(`\n[👑 ADMIN] ${ctx.from.first_name} (${chatId}): ${userText.slice(0, 80)}`);
       await ctx.sendChatAction('typing');
       const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
