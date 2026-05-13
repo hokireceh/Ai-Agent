@@ -14,7 +14,6 @@ const {
   buildReplyMenu,
   buildCommandPalette,
   modelMenu,
-  miniMenu,
   adminMenu,
   adminMiniMenu,
 } = require('./menus');
@@ -362,7 +361,6 @@ function registerHandlers(bot) {
       console.log(`[📤] [${provider}:${usedModel}] ${text.slice(0, 60).replace(/\n/g, ' ')}...`);
       await sendLong(ctx, text, {
         reply_parameters: { message_id: ctx.message.message_id },
-        ...miniMenu,
       });
     } catch (err) {
       clearInterval(typingInterval);
@@ -396,7 +394,6 @@ function registerHandlers(bot) {
 
       await sendLong(ctx, text, {
         reply_parameters: { message_id: ctx.message.message_id },
-        ...miniMenu,
       });
     } catch (err) {
       clearInterval(typingInterval);
@@ -455,7 +452,6 @@ function registerHandlers(bot) {
 
       await sendLong(ctx, result.text, {
         reply_parameters: { message_id: ctx.message.message_id },
-        ...miniMenu,
       });
     } catch (err) {
       clearInterval(typingInterval);
