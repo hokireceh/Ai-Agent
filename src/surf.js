@@ -224,38 +224,58 @@ async function fetchCryptoContext(userText) {
 
   const isAirdropQuery  = /airdrop|farming|farm|garap|task|testnet/i.test(userText);
   const tickers         = extractTickers(userText);
+  const nominalData     = extractNominal(userText); // { ticker, amount } — hanya jika ada angka
   const isSpecificToken = tickers.filter(t => t !== 'BTC' && t !== 'ETH').length > 0;
 
   try {
-    // Selalu fetch: fear & greed + top market (baseline)
-    // Gunakan named map agar ordering tidak kacau
     const fetchMap = {
       fearGreed:  fetchFearGreed(),
       topMarkets: fetchTopMarkets(8),
     };
 
-    // Fetch harga spesifik jika ada ticker non-mainstream di query
-    const extraTickers = tickers.filter(t => !['BTC','ETH','SOL','BNB','XRP'].includes(t));
-    if (isSpecificToken && extraTickers.length > 0) {
-      fetchMap.extraPrice = fetchPrice(extraTickers[0]);
+    // Price card hanya jika ada nominal (e.g. "1 HYPE", "5 BTC")
+    if (nominalData) {
+      fetchMap.priceCard = fetchPrice(nominalData.ticker);
+      fetchMap.usdIdr    = fetchUsdIdr();
+    } else {
+      // Fetch harga spesifik (tanpa price card) untuk token non-mainstream
+      const extraTickers = tickers.filter(t => !['BTC','ETH','SOL','BNB','XRP'].includes(t));
+      if (isSpecificToken && extraTickers.length > 0) {
+        fetchMap.extraPrice = fetchPrice(extraTickers[0]);
+      }
     }
 
-    // Fetch airdrop jika query tentang airdrop/farming
     if (isAirdropQuery) {
       fetchMap.airdrops = fetchAirdrops();
     }
 
-    // Await semua sekaligus
-    const keys    = Object.keys(fetchMap);
-    const values  = await Promise.all(Object.values(fetchMap));
-    const res     = Object.fromEntries(keys.map((k, i) => [k, values[i]]));
+    const keys   = Object.keys(fetchMap);
+    const values = await Promise.all(Object.values(fetchMap));
+    const res    = Object.fromEntries(keys.map((k, i) => [k, values[i]]));
 
-    const { fearGreed, topMarkets, extraPrice, airdrops } = res;
+    const { fearGreed, topMarkets, priceCard, usdIdr, extraPrice, airdrops } = res;
 
-    // Build context string
     const lines = ['[DATA REAL-TIME — diambil live dari Surf API, bukan training data]'];
     lines.push(`Waktu fetch: ${new Date().toUTCString()}`);
     lines.push('');
+
+    // ── Price Card (hanya jika nominal terdeteksi) ─────────────────────────────
+    if (nominalData && priceCard?.price != null) {
+      const marketData = topMarkets?.find(t => t.symbol === nominalData.ticker);
+      const card = formatPriceCard(
+        nominalData.ticker,
+        priceCard.price,
+        usdIdr,
+        priceCard.change24h,
+        marketData?.mcap ?? null,
+        marketData?.name ?? null,
+        nominalData.amount
+      );
+      lines.push('[PRICE CARD — tampilkan persis ini dalam tag <code>, jangan ubah formatnya]');
+      lines.push(card);
+      lines.push('[/PRICE CARD]');
+      lines.push('');
+    }
 
     if (fearGreed) {
       lines.push(`Fear & Greed Index: ${fearGreed.value}/100 — ${fearGreed.classification} (${fearGreed.date})`);
@@ -272,7 +292,7 @@ async function fetchCryptoContext(userText) {
       }
     }
 
-    if (extraPrice?.price != null) {
+    if (!nominalData && extraPrice?.price != null) {
       lines.push('');
       const px  = extraPrice.price.toLocaleString('en-US', { maximumFractionDigits: 6 });
       const chg = extraPrice.change24h ? ` | 24h: ${Number(extraPrice.change24h) > 0 ? '+' : ''}${extraPrice.change24h}%` : '';
