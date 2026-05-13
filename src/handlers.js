@@ -351,12 +351,19 @@ function registerHandlers(bot) {
     }
 
     // ── Normal chat flow ───────────────────────────────────────────────────────
+    // Jika user reply ke pesan tertentu, sertakan isi pesan itu sebagai konteks
+    const replyMsg  = ctx.message.reply_to_message;
+    const replyText = replyMsg?.text || replyMsg?.caption || null;
+    const contextualQuery = replyText
+      ? `[User membalas pesan ini: "${replyText.slice(0, 600)}"]\n\n${userText}`
+      : userText;
+
     console.log(`\n[📥] ${ctx.from.first_name} (${chatId}): ${userText.slice(0, 80)}`);
     await ctx.sendChatAction('typing');
     const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
 
     try {
-      const { text, usedModel, provider } = await smartRequest(chatId, userText);
+      const { text, usedModel, provider } = await smartRequest(chatId, contextualQuery, [], userText);
       clearInterval(typingInterval);
       console.log(`[📤] [${provider}:${usedModel}] ${text.slice(0, 60).replace(/\n/g, ' ')}...`);
       await sendLong(ctx, text, {
