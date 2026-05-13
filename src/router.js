@@ -50,7 +50,7 @@ function historyToGroq(history) {
     const textParts = msg.parts.filter(p => p.text);
     const hasMedia  = msg.parts.some(p => p.inlineData);
     const content   = textParts.map(p => p.text).join('')
-                    + (hasMedia ? '\n[Pengguna mengirim gambar/file]' : '');
+                    + (hasMedia ? '\n[Pengguna mengirim gambar/file — sudah dianalisis di pesan ini]' : '');
     messages.push({
       role:    msg.role === 'model' ? 'assistant' : 'user',
       content: content || '[...]',
@@ -75,7 +75,7 @@ async function askWithGemini(chatId, userMessage, imageParts = [], modelCascade 
       const model  = genAI.getGenerativeModel({
         model:             modelId,
         systemInstruction: ADAPTIVE_PROMPT,
-        generationConfig:  { maxOutputTokens: 1024 },
+        generationConfig:  { maxOutputTokens: 8192 },
       });
       const chat   = model.startChat({ history: session.history.slice(-30) });
       const result = await chat.sendMessage(msgParts);
@@ -132,7 +132,7 @@ async function askWithGroq(chatId, userMessage, modelId, saveMessage = null) {
         model:       modelId,
         messages,
         temperature: 0.7,
-        max_tokens:  1024,
+        max_tokens:  4096,
       });
 
       const text = completion.choices[0]?.message?.content || '';
