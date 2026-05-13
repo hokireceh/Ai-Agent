@@ -98,6 +98,19 @@ async function fetchTopMarkets(limit = 8) {
   }));
 }
 
+async function fetchGainers(limit = 5) {
+  const data = await surfFetch(`/market/ranking?sort_by=change_24h&limit=${limit}`);
+  if (!data?.length) return null;
+  return data.map(t => ({
+    symbol:    t.symbol,
+    name:      t.name,
+    price:     t.price_usd,
+    change24h: t.change_24h_pct?.toFixed(2),
+    mcap:      t.market_cap_usd,
+    volume24h: t.volume_24h_usd,
+  }));
+}
+
 async function fetchFearGreed() {
   const today = new Date();
   const from  = new Date(today - 3 * 86400000).toISOString().slice(0, 10);
@@ -223,6 +236,7 @@ async function fetchCryptoContext(userText) {
   if (!SURF_KEY) return null;
 
   const isAirdropQuery  = /airdrop|farming|farm|garap|task|testnet/i.test(userText);
+  const isGainersQuery  = /pump|naik|gain|gainer|top mover|trending|hot|panas|bullish market|yang lagi naik/i.test(userText);
   const tickers         = extractTickers(userText);
   const nominalData     = extractNominal(userText); // { ticker, amount } — hanya jika ada angka
   const isSpecificToken = tickers.filter(t => t !== 'BTC' && t !== 'ETH').length > 0;
@@ -232,6 +246,10 @@ async function fetchCryptoContext(userText) {
       fearGreed:  fetchFearGreed(),
       topMarkets: fetchTopMarkets(8),
     };
+
+    if (isGainersQuery) {
+      fetchMap.gainers = fetchGainers(5);
+    }
 
     // Price card hanya jika ada nominal (e.g. "1 HYPE", "5 BTC")
     if (nominalData) {
@@ -253,7 +271,7 @@ async function fetchCryptoContext(userText) {
     const values = await Promise.all(Object.values(fetchMap));
     const res    = Object.fromEntries(keys.map((k, i) => [k, values[i]]));
 
-    const { fearGreed, topMarkets, priceCard, usdIdr, extraPrice, airdrops } = res;
+    const { fearGreed, topMarkets, gainers, priceCard, usdIdr, extraPrice, airdrops } = res;
 
     const lines = ['[DATA REAL-TIME — diambil live dari Surf API, bukan training data]'];
     lines.push(`Waktu fetch: ${new Date().toUTCString()}`);
@@ -289,6 +307,16 @@ async function fetchCryptoContext(userText) {
         const mcap = t.mcap ? ` | MCap: $${(t.mcap / 1e9).toFixed(1)}B` : '';
         const px   = t.price != null ? `$${t.price.toLocaleString('en-US', { maximumFractionDigits: 4 })}` : 'N/A';
         lines.push(`  ${t.symbol}: ${px}${chg}${mcap}`);
+      }
+    }
+
+    if (gainers?.length) {
+      lines.push('');
+      lines.push('Top gainers 24h:');
+      for (const t of gainers) {
+        const px  = t.price != null ? `$${t.price.toLocaleString('en-US', { maximumFractionDigits: 4 })}` : 'N/A';
+        const vol = t.volume24h ? ` | Vol: $${(t.volume24h / 1e6).toFixed(1)}M` : '';
+        lines.push(`  ${t.symbol} (${t.name}): ${px} | +${t.change24h}%${vol}`);
       }
     }
 
