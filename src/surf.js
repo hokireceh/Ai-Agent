@@ -10,7 +10,7 @@ const CRYPTO_REGEX = new RegExp([
   // Token tickers umum
   '\\b(BTC|ETH|SOL|BNB|XRP|ADA|AVAX|DOT|MATIC|LINK|UNI|AAVE|ARB|OP|SUI|APT|INJ|TIA|SEI|DOGE|SHIB|PEPE|WIF|BONK|JUP|W|PYTH|STRK|MANTA|ALT|DYM|PIXEL|PORTAL|NFP|AI|XAI|MAVIA|SLERF|BOME|PONKE|MOG|POPCAT|NEIRO|GOAT|PNUT|ACT|CHILLGUY|VIRTUAL|AI16Z|AIXBT|ZEREBRO|GRIFFAIN|FARTCOIN|TRUMP|MELANIA|LIBRA|VINE|KEKIUS|PNUT|MOVE|HYPE|HBAR|TON|NOT|DOGS|HMSTR|CATI|MAJOR|BLUM|UXLINK|SEED|DOGS|BEES)\\b',
   // Kata kunci crypto
-  '\\b(bitcoin|ethereum|crypto|blockchain|defi|nft|token|coin|airdrop|testnet|mainnet|wallet|metamask|web3|dex|cex|swap|liquidity|yield|farming|staking|bridge|layer2|l2|rollup|zk|optimistic|arbitrum|optimism|base|polygon|solana|avalanche|bsc|binance|coinbase|bybit|okx|kucoin|gate|kraken|bitget)\\b',
+  '\\b(bitcoin|ethereum|crypto|blockchain|defi|nft|token|coin|airdrop|tge|tgе|token generation|testnet|mainnet|wallet|metamask|web3|dex|cex|swap|liquidity|yield|farming|staking|bridge|layer2|l2|rollup|zk|optimistic|arbitrum|optimism|base|polygon|solana|avalanche|bsc|binance|coinbase|bybit|okx|kucoin|gate|kraken|bitget)\\b',
   // Market & trading terms
   '\\b(harga|price|mcap|market cap|volume|ath|atl|pump|dump|bull|bear|long|short|futures|perp|funding|liquidation|leverage|margin|entry|exit|support|resistance|rsi|macd|ema|sma|ta|fa|tokenomics|vesting|unlock|supply|circulating|fdv)\\b',
   // Query patterns
