@@ -127,6 +127,97 @@ async function fetchAirdrops() {
   }));
 }
 
+async function fetchUsdIdr() {
+  try {
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    const res   = await fetch('https://api.frankfurter.app/latest?from=USD&to=IDR', {
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const json = await res.json();
+    return json.rates?.IDR ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// ─── Nominal Extractor ─────────────────────────────────────────────────────────
+// Deteksi pola "1 HYPE", "5.5 BTC", "0.001 ETH" dari teks user
+function extractNominal(text) {
+  for (const ticker of KNOWN_TICKERS) {
+    const re = new RegExp(
+      `(?:^|[\\s(])([0-9]+(?:[.,][0-9]+)?)\\s*${ticker}\\b|\\b${ticker}\\s+([0-9]+(?:[.,][0-9]+)?)(?:[\\s)]|$)`,
+      'i'
+    );
+    const m = text.match(re);
+    if (m) {
+      const raw    = m[1] || m[2];
+      const amount = parseFloat(raw.replace(',', '.'));
+      if (!isNaN(amount) && amount > 0) return { ticker, amount };
+    }
+  }
+  return null;
+}
+
+// ─── Price Card Formatter ──────────────────────────────────────────────────────
+function formatPriceCard(ticker, priceUsd, usdIdr, change24h, mcap, name, amount) {
+  const SEP = '─────────────────────';
+
+  const fmtUsd = (n) => {
+    if (n >= 1000)  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    if (n >= 1)     return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+    if (n >= 0.01)  return n.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 6 });
+    return n.toLocaleString('en-US', { minimumFractionDigits: 6, maximumFractionDigits: 8 });
+  };
+
+  const fmtIdr = (n) => {
+    const rounded = Math.round(n);
+    return 'Rp ' + rounded.toLocaleString('id-ID');
+  };
+
+  const rate    = usdIdr ?? 16300;
+  const idrUnit = priceUsd * rate;
+  const arrow   = change24h != null
+    ? (Number(change24h) >= 0 ? '▲' : '▼') + ' ' + Math.abs(Number(change24h)) + '%'
+    : '—';
+
+  const lines = [];
+
+  if (amount != null) {
+    const amtStr   = Number.isInteger(amount) ? String(amount) : String(amount);
+    const totalUsd = priceUsd * amount;
+    const totalIdr = idrUnit  * amount;
+
+    lines.push(`💰 ${amtStr} ${ticker}`);
+    lines.push(SEP);
+    lines.push(`USD    $${fmtUsd(totalUsd)}`);
+    lines.push(`IDR    ${fmtIdr(totalIdr)}`);
+    lines.push(SEP);
+    lines.push(`1 ${ticker}  $${fmtUsd(priceUsd)}  ·  ${fmtIdr(idrUnit)}`);
+    lines.push(`24h    ${arrow}`);
+  } else {
+    const displayName = name ? `${ticker} · ${name}` : ticker;
+    lines.push(`💰 ${displayName}`);
+    lines.push(SEP);
+    lines.push(`Harga  $${fmtUsd(priceUsd)}`);
+    lines.push(`       ${fmtIdr(idrUnit)}`);
+    lines.push(`24h    ${arrow}`);
+    if (mcap) {
+      const mcapStr = mcap >= 1e9
+        ? `$${(mcap / 1e9).toFixed(2)}B`
+        : `$${(mcap / 1e6).toFixed(0)}M`;
+      lines.push(`MCap   ${mcapStr}`);
+    }
+    lines.push(SEP);
+    lines.push(`1 ${ticker}  →  $${fmtUsd(priceUsd)}`);
+    lines.push(`${' '.repeat(String(ticker).length + 5)}${fmtIdr(idrUnit)}`);
+  }
+
+  return lines.join('\n');
+}
+
 // ─── Main Context Builder ──────────────────────────────────────────────────────
 async function fetchCryptoContext(userText) {
   if (!SURF_KEY) return null;
